@@ -1,5 +1,7 @@
 # Vocal Hero
 
+**Play online:** https://jermaineaaron1.github.io/Vocal-Hero/
+
 A self-contained browser game — no backend, no install. Open `vocal-hero.html` in any modern browser and sing.
 
 ## How to play
