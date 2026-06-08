@@ -40,11 +40,19 @@
   .stat.center{text-align:center;flex:1}
   .streak{color:var(--hit)!important}
   .mult-val{color:var(--gold)!important;font-size:22px!important}
+  /* Pause / Exit HUD buttons */
+  .hud-btn{pointer-events:all;background:rgba(11,16,38,.7);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:12px;padding:7px 14px;color:var(--ink);font-family:"DM Mono",monospace;font-size:13px;cursor:pointer;transition:.15s;}
+  .hud-btn:hover{border-color:var(--gold);color:var(--gold);}
+  /* Pause overlay */
+  #pauseOverlay{display:none;position:fixed;inset:0;z-index:20;background:rgba(11,16,38,.88);backdrop-filter:blur(12px);flex-direction:column;align-items:center;justify-content:center;gap:20px;}
+  #pauseOverlay.on{display:flex;}
+  #pauseOverlay h2{font-family:"Fraunces",serif;font-size:52px;font-weight:800;color:var(--gold);letter-spacing:.05em;}
+  #pauseOverlay p{color:var(--muted);font-size:13px;}
   canvas{display:block}
   #cv{width:100vw;height:100vh}
   /* Lyric / phrase bar */
   .lyricbar{position:fixed;left:0;right:0;bottom:0;z-index:5;text-align:center;padding:14px 20px 28px;pointer-events:none;background:linear-gradient(0deg,rgba(11,16,38,.92) 60%,transparent)}
-  .phrase-line{font-family:"DM Mono",monospace;font-size:clamp(12px,2.8vw,16px);color:var(--muted);min-height:24px;margin-bottom:6px;line-height:1.6;letter-spacing:.02em}
+  .phrase-line{font-family:"DM Mono",monospace;font-size:clamp(16px,3.5vw,24px);color:var(--muted);min-height:30px;margin-bottom:8px;line-height:1.6;letter-spacing:.02em}
   .phrase-line .syl-cur{color:var(--gold);font-weight:500;text-shadow:0 0 14px rgba(240,180,41,.7)}
   .phrase-line .syl-past{color:rgba(154,160,200,.3)}
   .phrase-line .syl-fut{color:rgba(154,160,200,.65)}
@@ -121,6 +129,8 @@
     <div class="stat"><div class="k">Score</div><div class="val" id="hScore">0</div></div>
     <div class="stat center"><div class="k">Multiplier</div><div class="val mult-val" id="hMult">1×</div></div>
     <div class="stat right"><div class="k">Streak</div><div class="val streak" id="hStreak">0</div></div>
+    <button class="hud-btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
+    <button class="hud-btn" onclick="exitToHome()">✕ Menu</button>
   </div>
   <canvas id="cv"></canvas>
   <div class="lyricbar">
@@ -130,6 +140,15 @@
   </div>
   <div class="cd" id="cd"></div>
 </section>
+
+<div id="pauseOverlay">
+  <h2>PAUSED</h2>
+  <p>Press P or click Resume to continue</p>
+  <div class="row" style="margin-top:0">
+    <button class="btn" onclick="togglePause()">▶ Resume</button>
+    <button class="btn ghost" onclick="exitToHome()">← Main Menu</button>
+  </div>
+</div>
 
 <section id="result" class="screen">
   <div class="grade" id="rGrade">A</div>
@@ -347,14 +366,28 @@ function normalize(notes){
 let audioCtx,analyser,micStream,timeBuf;
 async function startMic(){
   audioCtx=new(window.AudioContext||window.webkitAudioContext)();
-  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
-  const s=audioCtx.createMediaStreamSource(micStream);
-  analyser=audioCtx.createAnalyser();analyser.fftSize=2048;
-  s.connect(analyser);timeBuf=new Float32Array(analyser.fftSize);
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{
+    echoCancellation:true,    // remove echo
+    noiseSuppression:true,    // reduce background noise
+    autoGainControl:false,    // we handle gain ourselves
+    channelCount:1
+  }});
+  const src=audioCtx.createMediaStreamSource(micStream);
+  // High-pass filter: cut everything below 80 Hz (rumble, HVAC, handling noise)
+  const hpf=audioCtx.createBiquadFilter();
+  hpf.type="highpass"; hpf.frequency.value=80; hpf.Q.value=0.7;
+  // Low-pass filter: cut everything above 1100 Hz (hiss, sibilance artefacts)
+  const lpf=audioCtx.createBiquadFilter();
+  lpf.type="lowpass"; lpf.frequency.value=1100; lpf.Q.value=0.7;
+  analyser=audioCtx.createAnalyser();
+  analyser.fftSize=2048;
+  analyser.smoothingTimeConstant=0.4; // mild smoothing to reduce jitter
+  src.connect(hpf); hpf.connect(lpf); lpf.connect(analyser);
+  timeBuf=new Float32Array(analyser.fftSize);
 }
 function detectPitch(buf,sr){
   let SIZE=buf.length,rms=0;for(let i=0;i<SIZE;i++){const v=buf[i];rms+=v*v;}rms=Math.sqrt(rms/SIZE);
-  if(rms<0.012)return -1;
+  if(rms<0.028)return -1; // raised threshold — ignore quiet background noise
   let r1=0,r2=SIZE-1;const th=0.2;
   for(let i=0;i<SIZE/2;i++){if(Math.abs(buf[i])<th){r1=i;break;}}
   for(let i=1;i<SIZE/2;i++){if(Math.abs(buf[SIZE-i])<th){r2=SIZE-i;break;}}
@@ -384,7 +417,7 @@ window.addEventListener("resize",()=>{resize();if($("create").classList.contains
 
 // ─── GAME ENGINE ──────────────────────────────────────────────────────────────
 let game=null;
-const PIANO_W=54;   // piano keyboard panel width (px)
+const PIANO_W=72;   // piano keyboard panel width (px)
 const NOW_FRAC=0.22;// hit line as fraction of TRACK width (after piano panel)
 const PXS=140;      // pixels per second
 const LEAD=3.0;     // seconds of lead-in before first note
@@ -465,6 +498,7 @@ function finalizeNote(idx){
 
 function gameLoop(now){
   if(!game||game.state!=="play")return;
+  game.pausedAt=now-game.t0; // track elapsed so pause/resume works
   const el=(now-game.t0)/1000;
 
   // Pitch detection
@@ -513,70 +547,89 @@ function rr(c,x,y,w,h,r){
 }
 
 function drawPianoPanel(){
-  const rowH=H/(MAX_MIDI-MIN_MIDI+1);
-  // Panel background
-  ctx.fillStyle="#0a0e22";
-  ctx.fillRect(0,0,PIANO_W,H);
-  // Separator line
-  ctx.strokeStyle="rgba(44,52,112,.9)";
-  ctx.lineWidth=2;
-  ctx.beginPath();ctx.moveTo(PIANO_W,0);ctx.lineTo(PIANO_W,H);ctx.stroke();
+  const rowH=Math.max(1,H/(MAX_MIDI-MIN_MIDI+1));
+  const BLACK_PCS=[1,3,6,8,10];
+  const WHITE_NAMES=["C","D","E","F","G","A","B"];
 
+  // Panel background
+  ctx.fillStyle="#070b1e";
+  ctx.fillRect(0,0,PIANO_W,H);
+
+  // Draw each key row
   for(let m=MIN_MIDI;m<=MAX_MIDI;m++){
     const y=midiToY(m);
-    const pc=(((m)%12)+12)%12;
-    const isBlack=[1,3,6,8,10].includes(pc);
+    const pc=((m%12)+12)%12;
+    const isBlack=BLACK_PCS.includes(pc);
     const isC=(pc===0);
 
-    // Key background
-    ctx.fillStyle=isBlack?"#0d1030":"#1a2050";
-    ctx.fillRect(1,y-rowH/2,PIANO_W-3,rowH);
+    // Key fill — white keys brighter, black keys darker
+    ctx.fillStyle=isBlack?"#111530":"#22285a";
+    ctx.fillRect(1,y-rowH/2+0.5,PIANO_W-4,rowH-1);
 
-    // White key accent line on right
+    // White key right edge highlight
     if(!isBlack){
-      ctx.fillStyle="rgba(255,255,255,.06)";
-      ctx.fillRect(PIANO_W-6,y-rowH/2,5,rowH);
+      ctx.fillStyle="rgba(255,255,255,.12)";
+      ctx.fillRect(PIANO_W-7,y-rowH/2+0.5,5,rowH-1);
     }
 
-    // C note label
-    if(isC){
-      ctx.fillStyle="#f0b429";
-      ctx.font="bold 9px 'DM Mono'";
-      ctx.textAlign="right";
-      ctx.fillText(noteName(m),PIANO_W-8,y+3);
-    } else if(!isBlack && rowH>10){
-      ctx.fillStyle="rgba(154,160,200,.4)";
-      ctx.font="8px 'DM Mono'";
-      ctx.textAlign="right";
-      ctx.fillText(noteName(m),PIANO_W-8,y+3);
+    // Row divider
+    ctx.strokeStyle=isC?"rgba(240,180,41,.5)":"rgba(44,52,112,.6)";
+    ctx.lineWidth=isC?1.5:0.5;
+    ctx.beginPath();ctx.moveTo(0,y+rowH/2);ctx.lineTo(PIANO_W,y+rowH/2);ctx.stroke();
+
+    // Note name label — show for ALL white keys if they fit, always show C notes
+    const showLabel=isC||(rowH>=11&&!isBlack);
+    if(showLabel){
+      ctx.fillStyle=isC?"#f0b429":"rgba(180,188,230,.75)";
+      ctx.font=(isC?"bold ":"")+(Math.min(10,rowH*0.65))+"px 'DM Mono'";
+      ctx.textAlign="center";
+      ctx.textBaseline="middle";
+      ctx.fillText(noteName(m),PIANO_W/2,y);
     }
   }
-  ctx.textAlign="left";
 
-  // Highlight the active note's key
+  // Active note lane highlight (full-width stripe on track too — drawn over the panel portion)
   if(game&&game.lastActIdx>=0){
     const e=game.tl.events[game.lastActIdx];
     if(e){
       const y=midiToY(e.m);
-      ctx.fillStyle="rgba(240,180,41,.35)";
-      ctx.fillRect(1,y-rowH/2,PIANO_W-3,rowH);
+      ctx.fillStyle="rgba(240,180,41,.28)";
+      ctx.fillRect(1,y-rowH/2,PIANO_W-4,rowH);
+      // Gold border around active key
+      ctx.strokeStyle="rgba(240,180,41,.8)";
+      ctx.lineWidth=1.5;
+      ctx.strokeRect(1.5,y-rowH/2+0.5,PIANO_W-6,rowH-1);
+      // Active note name — bold gold
+      ctx.fillStyle="#f0b429";
+      ctx.font="bold "+Math.min(11,rowH*0.7)+"px 'DM Mono'";
+      ctx.textAlign="center";ctx.textBaseline="middle";
+      ctx.fillText(noteName(e.m),PIANO_W/2,y);
     }
   }
-  // Highlight singer's current pitch key
+
+  // Singer pitch key highlight
   if(game&&game.um!=null){
-    const y=midiToY(game.um);
-    const act=game.lastActIdx>=0?game.tl.events[game.lastActIdx]:null;
-    const onPitch=act&&Math.abs(game.um-act.m)<=HIT_TOL;
-    ctx.fillStyle=onPitch?"rgba(90,209,155,.5)":"rgba(255,255,255,.2)";
-    ctx.fillRect(1,y-rowH/2,PIANO_W-3,rowH);
-    // Arrow pointing right
-    ctx.fillStyle=onPitch?"#5ad19b":"rgba(255,255,255,.6)";
+    const sy=midiToY(game.um);
+    const activeEvt=game.lastActIdx>=0?game.tl.events[game.lastActIdx]:null;
+    const onPitch=activeEvt&&Math.abs(game.um-activeEvt.m)<=HIT_TOL;
+    ctx.fillStyle=onPitch?"rgba(90,209,155,.55)":"rgba(255,255,255,.22)";
+    ctx.fillRect(1,sy-rowH/2,PIANO_W-4,rowH);
+    // Arrow indicator
+    const col=onPitch?"#5ad19b":"rgba(200,210,255,.8)";
+    ctx.fillStyle=col;
     ctx.beginPath();
-    ctx.moveTo(PIANO_W-2,y);
-    ctx.lineTo(PIANO_W-10,y-5);
-    ctx.lineTo(PIANO_W-10,y+5);
+    ctx.moveTo(PIANO_W-1,sy);
+    ctx.lineTo(PIANO_W-9,sy-5);
+    ctx.lineTo(PIANO_W-9,sy+5);
     ctx.closePath();ctx.fill();
   }
+
+  // Right-edge separator
+  ctx.strokeStyle="rgba(100,120,220,.7)";
+  ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(PIANO_W,0);ctx.lineTo(PIANO_W,H);ctx.stroke();
+
+  ctx.textAlign="left";ctx.textBaseline="alphabetic";
 }
 
 function drawGame(el,act){
@@ -887,6 +940,43 @@ async function analyzeFile(file){
 function importSong(file){const r=new FileReader();r.onload=()=>{try{const o=JSON.parse(r.result);if(!o.notes||!Array.isArray(o.notes))throw 0;o.id=o.id||"imp-"+Date.now();o.sub=o.sub||"Imported";o.level=o.level||"Custom";SONGS.push(o);renderSongs();}catch(e){alert("That doesn't look like a Vocal Hero song file.");}};r.readAsText(file);}
 function currentDraftSong(){const ord=draftNotes.slice().sort((a,b)=>a.start-b.start);return{id:"user-"+Date.now(),title:$("songTitle").value||"My song",sub:"Your creation",level:"Custom",key:NN[songKey],bpm,notes:ord.map(n=>({m:n.m,start:+n.start.toFixed(3),d:+n.dur.toFixed(3),l:n.l||"la"}))};}
 function downloadSong(){const s=currentDraftSong();const b=new Blob([JSON.stringify(s,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=(s.title||"song").replace(/[^a-z0-9]+/gi,"-").toLowerCase()+".json";a.click();}
+
+// ─── PAUSE / EXIT ────────────────────────────────────────────────────────────
+let paused=false;
+function togglePause(){
+  if(!game||game.state==="cd"||game.state==="done")return;
+  paused=!paused;
+  const overlay=$("pauseOverlay");
+  const btn=$("pauseBtn");
+  if(paused){
+    game.state="paused";
+    overlay.classList.add("on");
+    btn.textContent="▶ Resume";
+    if(audioCtx&&audioCtx.state==="running")audioCtx.suspend();
+  }else{
+    game.state="play";
+    overlay.classList.remove("on");
+    btn.textContent="⏸ Pause";
+    if(audioCtx&&audioCtx.state==="suspended")audioCtx.resume();
+    // Re-anchor t0 so elapsed time is correct after pause
+    game.t0=performance.now()-game.pausedAt;
+    requestAnimationFrame(gameLoop);
+  }
+}
+function exitToHome(){
+  paused=false;
+  $("pauseOverlay").classList.remove("on");
+  $("pauseBtn").textContent="⏸ Pause";
+  if(game)game.state="done";
+  game=null;
+  if(audioCtx&&audioCtx.state==="running")audioCtx.suspend();
+  show("home");
+}
+// Track paused-at time inside gameLoop
+document.addEventListener("keydown",e=>{
+  if(e.key==="p"||e.key==="P"||e.key===" ")togglePause();
+  if(e.key==="Escape")exitToHome();
+});
 
 // ─── SCREEN ROUTING ──────────────────────────────────────────────────────────
 function show(id){for(const s of["home","play","result","create"]){const el=$(s);if(s==="play")el.classList.toggle("on",id==="play");else el.classList.toggle("on",id===s);}}
