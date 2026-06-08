@@ -582,179 +582,155 @@ function drawPianoPanel(){
 function drawGame(el,act){
   ctx.clearRect(0,0,W,H);
   const nx=nowX();
-  const tx=trackX();
-  const tw=trackW();
+  const tx=PIANO_W;
+  const rowH=Math.max(1,H/(MAX_MIDI-MIN_MIDI+1));
 
-  // ── Pitch lane background (track area only) ──
-  const rowH=H/(MAX_MIDI-MIN_MIDI+1);
+  // ── 1. Pitch lane rows ──
   for(let m=MIN_MIDI;m<=MAX_MIDI;m++){
     const y=midiToY(m);
-    const pc=(((m)%12)+12)%12;
+    const pc=((m%12)+12)%12;
     const isBlack=[1,3,6,8,10].includes(pc);
-    ctx.fillStyle=isBlack?"rgba(8,11,32,.6)":"rgba(18,22,55,.45)";
-    ctx.fillRect(tx,y-rowH/2,tw,rowH);
-  }
-
-  // ── Horizontal lane dividers ──
-  ctx.lineWidth=1;
-  for(let m=MIN_MIDI;m<=MAX_MIDI;m++){
-    const y=midiToY(m);
-    const pc=(((m)%12)+12)%12;
-    const isC=(pc===0);
-    ctx.strokeStyle=isC?"rgba(240,180,41,.25)":"rgba(44,52,112,.3)";
-    ctx.lineWidth=isC?1.5:0.5;
-    ctx.beginPath();ctx.moveTo(tx,y);ctx.lineTo(W,y);ctx.stroke();
-  }
-
-  // ── Approach glow for upcoming notes ──
-  for(let i=0;i<game.tl.events.length;i++){
-    const e=game.tl.events[i];
-    const x1=tx+(e.start-el)*PXS+tw*NOW_FRAC;
-    if(x1>W||tx+(e.end-el)*PXS+tw*NOW_FRAC<tx)continue;
-    if(x1>nx&&x1<nx+180){
-      const alpha=(1-(x1-nx)/180)*0.18;
-      const y=midiToY(e.m);
-      const grad=ctx.createLinearGradient(nx,0,x1,0);
-      grad.addColorStop(0,`rgba(240,180,41,${alpha})`);
-      grad.addColorStop(1,"rgba(240,180,41,0)");
-      ctx.fillStyle=grad;
-      ctx.fillRect(nx,y-NOTE_H/2,x1-nx,NOTE_H);
+    ctx.fillStyle=isBlack?"rgba(8,11,32,.65)":"rgba(18,22,55,.5)";
+    ctx.fillRect(tx,y-rowH/2,W-tx,rowH);
+    // C-note gold line
+    if(pc===0){
+      ctx.strokeStyle="rgba(240,180,41,.3)";
+      ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(tx,y);ctx.lineTo(W,y);ctx.stroke();
     }
   }
 
-  // ── Note bars ──
-  ctx.save();
-  ctx.beginPath();ctx.rect(tx,0,tw,H);ctx.clip(); // clip to track area
-
+  // ── 2. Note bars ──
   for(let i=0;i<game.tl.events.length;i++){
     const e=game.tl.events[i];
     const x1=nx+(e.start-el)*PXS;
     const x2=nx+(e.end-el)*PXS;
-    if(x2<tx-10||x1>W+10)continue;
+    if(x2<tx||x1>W)continue;
+
+    const cx1=Math.max(x1,tx);   // clamp left to piano edge
+    const cx2=Math.min(x2,W);    // clamp right to canvas edge
+    const cw=cx2-cx1;
+    if(cw<=0)continue;
 
     const y=midiToY(e.m);
-    const barW=Math.max(x2-x1,8);
     const isAct=(i===game.lastActIdx);
     const isHit=game.hits.has(i);
     const isPast=x2<=nx;
     const ns=game.noteState.get(i);
     const holdPct=ns&&ns.total>0?ns.frames/ns.total:0;
 
-    // ── Base bar ──
-    if(isPast){
-      ctx.fillStyle=isHit?"rgba(90,209,155,.3)":"rgba(224,90,107,.2)";
-    }else if(isAct){
-      ctx.fillStyle="rgba(40,50,120,.9)";
-      ctx.shadowColor="rgba(240,180,41,.4)";ctx.shadowBlur=18;
-    }else{
-      const dist=x1-nx;
-      const alpha=Math.max(0.3,Math.min(0.75,1-dist/700));
-      ctx.fillStyle=`rgba(80,95,190,${alpha})`;
-    }
-    rr(ctx,x1,y-NOTE_H/2,barW,NOTE_H,NOTE_H/2);
-    ctx.fill();ctx.shadowBlur=0;
+    // Base bar colour
+    let baseCol;
+    if(isPast) baseCol=isHit?"rgba(90,209,155,.28)":"rgba(224,90,107,.18)";
+    else if(isAct) baseCol="rgba(40,52,140,.95)";
+    else{ const a=Math.max(0.3,Math.min(0.72,1-(x1-nx)/650)); baseCol=`rgba(75,90,190,${a})`; }
 
-    // ── Hold fill (left portion = sung section) ──
+    ctx.fillStyle=baseCol;
+    if(isAct){ctx.shadowColor="rgba(240,180,41,.45)";ctx.shadowBlur=20;}
+    rr(ctx,cx1,y-NOTE_H/2,cw,NOTE_H,NOTE_H/2);
+    ctx.fill();
+    ctx.shadowBlur=0;
+
+    // Hold-fill: colour the already-elapsed portion of an active note
     if(!isPast&&x1<nx){
-      const passedW=Math.min(nx,x2)-Math.max(x1,tx);
-      if(passedW>0){
-        ctx.fillStyle=holdPct>=0.55?"rgba(90,209,155,.9)":"rgba(224,90,107,.75)";
-        rr(ctx,Math.max(x1,tx),y-NOTE_H/2,passedW,NOTE_H,NOTE_H/2);
+      const fillX=Math.max(x1,tx);
+      const fillW=Math.min(nx,cx2)-fillX;
+      if(fillW>0){
+        ctx.fillStyle=holdPct>=0.55?"rgba(90,209,155,.88)":"rgba(224,90,107,.7)";
+        rr(ctx,fillX,y-NOTE_H/2,fillW,NOTE_H,NOTE_H/2);
         ctx.fill();
       }
     }
 
-    // ── Active tail glow (right of hit line) ──
-    if(isAct&&x2>nx){
-      const tailX=Math.max(x1,nx);
-      const tailW=x2-tailX;
-      ctx.fillStyle="rgba(240,180,41,.92)";
-      ctx.shadowColor="rgba(240,180,41,.8)";ctx.shadowBlur=16;
-      rr(ctx,tailX,y-NOTE_H/2+3,tailW,NOTE_H-6,NOTE_H/2);
-      ctx.fill();ctx.shadowBlur=0;
-      // Shimmer pulse on tail
-      const pulse=0.5+0.5*Math.sin(Date.now()/120);
-      ctx.fillStyle=`rgba(255,255,200,${pulse*0.25})`;
-      rr(ctx,tailX,y-NOTE_H/2+3,tailW,NOTE_H-6,NOTE_H/2);
-      ctx.fill();
+    // Gold tail on active note (right of hit line)
+    if(isAct&&cx2>nx){
+      const tailX=Math.max(cx1,nx);
+      const tailW=cx2-tailX;
+      if(tailW>0){
+        ctx.fillStyle="rgba(240,180,41,.92)";
+        ctx.shadowColor="rgba(240,180,41,.75)";ctx.shadowBlur=14;
+        rr(ctx,tailX,y-NOTE_H/2+3,tailW,NOTE_H-6,NOTE_H/2);
+        ctx.fill();
+        ctx.shadowBlur=0;
+        const pulse=0.5+0.5*Math.sin(Date.now()/130);
+        ctx.fillStyle=`rgba(255,255,200,${pulse*0.22})`;
+        rr(ctx,tailX,y-NOTE_H/2+3,tailW,NOTE_H-6,NOTE_H/2);
+        ctx.fill();
+      }
     }
 
-    // ── Border ──
-    ctx.strokeStyle=isAct?"rgba(240,180,41,.8)":isPast?(isHit?"rgba(90,209,155,.4)":"rgba(224,90,107,.25)"):"rgba(90,100,200,.55)";
+    // Border
+    ctx.strokeStyle=isAct?"rgba(240,180,41,.75)":isPast?(isHit?"rgba(90,209,155,.4)":"rgba(224,90,107,.22)"):"rgba(85,100,205,.5)";
     ctx.lineWidth=isAct?2:1;
-    rr(ctx,x1,y-NOTE_H/2,barW,NOTE_H,NOTE_H/2);
+    rr(ctx,cx1,y-NOTE_H/2,cw,NOTE_H,NOTE_H/2);
     ctx.stroke();
 
-    // ── Lyric ON the note bar ──
-    const lyric=e.l;
-    const labelX=Math.max(x1,tx)+6;
-    const labelMaxW=Math.min(x2,W)-labelX-4;
-    if(labelMaxW>8){
-      ctx.save();
-      ctx.beginPath();ctx.rect(labelX,y-NOTE_H/2,labelMaxW,NOTE_H);ctx.clip();
-      ctx.fillStyle=isAct?"#241a00":(isPast?(isHit?"#0d2e1e":"#3a0a10"):"rgba(255,255,255,.9)");
-      ctx.font=`${isAct?"bold ":""}${Math.min(13,NOTE_H*0.6)}px 'DM Mono'`;
+    // Lyric text inside the bar
+    const lyrX=cx1+6;
+    const lyrMaxW=cx2-lyrX-4;
+    if(lyrMaxW>6){
+      ctx.fillStyle=isAct?"#1a1000":(isPast?(isHit?"#0a2a18":"rgba(255,255,255,.45)"):"rgba(255,255,255,.88)");
+      ctx.font=(isAct?"bold ":"")+"12px 'DM Mono'";
       ctx.textBaseline="middle";
-      ctx.fillText(lyric,labelX,y);
+      ctx.save();
+      ctx.beginPath();ctx.rect(lyrX,y-NOTE_H/2,lyrMaxW,NOTE_H);ctx.clip();
+      ctx.fillText(e.l,lyrX,y);
       ctx.restore();
+      ctx.textBaseline="alphabetic";
     }
   }
-  ctx.restore(); // end track clip
 
-  // ── Hit line ──
-  const lineGrad=ctx.createLinearGradient(nx-2,0,nx+2,0);
-  lineGrad.addColorStop(0,"rgba(240,180,41,0)");
-  lineGrad.addColorStop(0.5,"rgba(240,180,41,.9)");
-  lineGrad.addColorStop(1,"rgba(240,180,41,0)");
-  ctx.strokeStyle=lineGrad;
-  ctx.lineWidth=3;ctx.setLineDash([]);
+  // ── 3. Hit line ──
+  ctx.lineWidth=2.5;ctx.setLineDash([]);
+  ctx.strokeStyle="rgba(240,180,41,.85)";
+  ctx.shadowColor="rgba(240,180,41,.5)";ctx.shadowBlur=10;
   ctx.beginPath();ctx.moveTo(nx,0);ctx.lineTo(nx,H);ctx.stroke();
-  // Hit line tick marks at note row positions
+  ctx.shadowBlur=0;
   if(act){
-    const y=midiToY(act.m);
+    const hy=midiToY(act.m);
     ctx.fillStyle="rgba(240,180,41,.9)";
-    ctx.beginPath();ctx.arc(nx,y,5,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(nx,hy,5,0,Math.PI*2);ctx.fill();
   }
 
-  // ── Singer pitch trail ──
+  // ── 4. Singer trail ──
   ctx.lineWidth=2.5;
-  ctx.strokeStyle="rgba(255,255,255,.18)";
-  ctx.beginPath();let trailStarted=false;
+  ctx.strokeStyle="rgba(255,255,255,.2)";
+  ctx.beginPath();let ts=false;
   for(let i=0;i<game.trail.length;i++){
-    const m=game.trail[i];if(m==null){trailStarted=false;continue;}
-    const x=nx-(game.trail.length-1-i)*3.5,y=midiToY(m);
-    if(!trailStarted){ctx.moveTo(x,y);trailStarted=true;}else ctx.lineTo(x,y);
+    const m=game.trail[i];if(m==null){ts=false;continue;}
+    const tx2=nx-(game.trail.length-1-i)*3.5,ty=midiToY(m);
+    if(!ts){ctx.moveTo(tx2,ty);ts=true;}else ctx.lineTo(tx2,ty);
   }
   ctx.stroke();
 
-  // ── Singer dot ──
+  // ── 5. Singer dot ──
   if(game.um!=null){
-    const y=midiToY(game.um);
-    const onPitch=act&&Math.abs(game.um-act.m)<=HIT_TOL;
-    const partialPitch=!onPitch&&act&&Math.abs(game.um-act.m)<=PARTIAL_TOL;
-    const col=onPitch?"#5ad19b":partialPitch?"#ffd97a":"#f4f1e6";
-    ctx.beginPath();ctx.arc(nx,y,20,0,Math.PI*2);
-    ctx.fillStyle=onPitch?"rgba(90,209,155,.12)":partialPitch?"rgba(255,217,122,.08)":"rgba(255,255,255,.04)";
+    const sy=midiToY(game.um);
+    const onP=act&&Math.abs(game.um-act.m)<=HIT_TOL;
+    const nearP=!onP&&act&&Math.abs(game.um-act.m)<=PARTIAL_TOL;
+    const col=onP?"#5ad19b":nearP?"#ffd97a":"#f4f1e6";
+    ctx.beginPath();ctx.arc(nx,sy,20,0,Math.PI*2);
+    ctx.fillStyle=onP?"rgba(90,209,155,.1)":nearP?"rgba(255,217,122,.07)":"rgba(255,255,255,.04)";
     ctx.fill();
-    ctx.beginPath();ctx.arc(nx,y,10,0,Math.PI*2);
-    ctx.fillStyle=col;ctx.shadowColor=col;ctx.shadowBlur=onPitch?28:12;
+    ctx.beginPath();ctx.arc(nx,sy,10,0,Math.PI*2);
+    ctx.fillStyle=col;ctx.shadowColor=col;ctx.shadowBlur=onP?26:10;
     ctx.fill();ctx.shadowBlur=0;
   }
 
-  // ── Piano panel (drawn last so it's on top) ──
+  // ── 6. Piano panel (drawn ON TOP to cover note overflow on left) ──
   drawPianoPanel();
 
-  // ── Score popups ──
+  // ── 7. Score popups ──
   game.popups=game.popups.filter(p=>p.life<55);
-  ctx.save();
-  game.popups.forEach(p=>{
-    p.life++;
+  for(let i=0;i<game.popups.length;i++){
+    const p=game.popups[i];p.life++;
     ctx.globalAlpha=1-p.life/55;
     ctx.fillStyle=p.col;
-    ctx.font="bold 16px 'DM Mono'";
-    ctx.fillText("+"+p.pts, p.x+20, p.y-p.life*1.8);
-  });
-  ctx.restore();
+    ctx.font="bold 15px 'DM Mono'";
+    ctx.textBaseline="alphabetic";
+    ctx.fillText("+"+p.pts,p.x+22,p.y-p.life*1.6);
+  }
+  ctx.globalAlpha=1;
 }
 
 function updateHUD(el,act){
