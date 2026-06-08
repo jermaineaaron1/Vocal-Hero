@@ -112,6 +112,21 @@
   .empty{padding:24px;text-align:center;color:var(--muted);font-size:12px}
   /* Score popup */
   .score-popup{position:absolute;pointer-events:none;font-family:"Fraunces",serif;font-size:18px;font-weight:700;color:var(--hit);text-shadow:0 0 12px rgba(90,209,155,.8)}
+  /* Pre-game settings screen */
+  #pregame .wrap{width:min(500px,94vw);text-align:center}
+  #pregame .song-header{font-family:"Fraunces",serif;font-size:clamp(22px,5vw,34px);font-weight:800;line-height:1.1}
+  #pregame .song-sub{color:var(--muted);font-size:13px;margin-top:6px}
+  .setting-block{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:16px;padding:18px 20px;margin-top:18px;text-align:left}
+  .setting-block .setting-label{font-size:10px;color:var(--muted);letter-spacing:.16em;text-transform:uppercase;margin-bottom:12px;display:block}
+  .pill-group{display:flex;gap:8px;flex-wrap:wrap}
+  .pill{font-family:"DM Mono",monospace;font-size:12px;padding:8px 14px;border-radius:99px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer;transition:.15s}
+  .pill:hover{border-color:var(--gold-soft);color:var(--ink)}
+  .pill.on{background:rgba(240,180,41,.15);border-color:var(--gold);color:var(--gold-soft);font-weight:500}
+  .key-display{font-family:"Fraunces",serif;font-size:28px;font-weight:800;color:var(--gold);text-align:center;margin:10px 0 14px}
+  .transpose-row{display:flex;align-items:center;justify-content:center;gap:12px}
+  .transpose-btn{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--ink);font-size:20px;cursor:pointer;transition:.15s;display:flex;align-items:center;justify-content:center}
+  .transpose-btn:hover{border-color:var(--gold);color:var(--gold)}
+  .voice-info{font-size:11px;color:var(--muted);margin-top:8px;text-align:center}
 </style>
 </head>
 <body>
@@ -125,6 +140,38 @@
     <label class="btn ghost sm filebtn">Import song file<input type="file" id="importFile" accept=".json,application/json" hidden></label>
   </div>
   <p class="hint">Best with headphones in a quiet room. Your voice is processed on your device only.</p>
+</section>
+
+<section id="pregame" class="screen">
+  <div class="wrap">
+    <div class="song-header" id="pgTitle"></div>
+    <div class="song-sub" id="pgSub"></div>
+
+    <!-- Key / Transpose -->
+    <div class="setting-block">
+      <span class="setting-label">🎵 Key — transpose the song to fit your voice</span>
+      <div class="transpose-row">
+        <button class="transpose-btn" id="transposeDown">−</button>
+        <div>
+          <div class="key-display" id="keyDisplay">D major</div>
+          <div style="font-size:11px;color:var(--muted);text-align:center" id="semitoneDisplay">Original key</div>
+        </div>
+        <button class="transpose-btn" id="transposeUp">+</button>
+      </div>
+    </div>
+
+    <!-- Voice Range -->
+    <div class="setting-block">
+      <span class="setting-label">🎤 Voice type — sets the pitch display range</span>
+      <div class="pill-group" id="voicePills"></div>
+      <div class="voice-info" id="voiceInfo"></div>
+    </div>
+
+    <div class="row" style="margin-top:24px">
+      <button class="btn" id="pgStart">▶ Start singing</button>
+      <button class="btn ghost" onclick="show('home')">← Back</button>
+    </div>
+  </div>
 </section>
 
 <section id="play">
@@ -353,7 +400,23 @@ const midiToFreq=m=>440*Math.pow(2,(m-69)/12);
 const freqToMidi=f=>69+12*Math.log2(f/440);
 const NN=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 const noteName=m=>{const r=Math.round(m);return NN[((r%12)+12)%12]+(Math.floor(r/12)-1);};
-const MIN_MIDI=55,MAX_MIDI=79,HIT_TOL=1.2,PARTIAL_TOL=2.5;
+let MIN_MIDI=48,MAX_MIDI=76; // mutable — set by voice range selection
+const HIT_TOL=1.2,PARTIAL_TOL=2.5;
+
+// Voice range presets
+const VOICE_RANGES=[
+  {id:"bass",     label:"Bass",      sub:"E2 – E4", min:40, max:64},
+  {id:"baritone", label:"Baritone",  sub:"A2 – A4", min:45, max:69},
+  {id:"tenor",    label:"Tenor",     sub:"C3 – C5", min:48, max:72},
+  {id:"alto",     label:"Alto",      sub:"F3 – F5", min:53, max:77},
+  {id:"mezzo",    label:"Mezzo",     sub:"A3 – A5", min:57, max:81},
+  {id:"soprano",  label:"Soprano",   sub:"C4 – C6", min:60, max:84},
+];
+let selectedVoice=VOICE_RANGES[2]; // default: Tenor
+
+// Key transposition
+let gameTranspose=0;
+let pendingSong=null; // song waiting to be launched after settings
 const SCALE=[0,2,4,5,7,9,11];
 const foldMidi=m=>{while(m<MIN_MIDI-1)m+=12;while(m>MAX_MIDI+1)m-=12;return Math.min(MAX_MIDI,Math.max(MIN_MIDI,m));};
 
@@ -428,7 +491,7 @@ const NOTE_H=22;    // note bar height in pixels
 
 function buildTimeline(song){
   const n=normalize(song.notes).slice().sort((a,b)=>a.start-b.start);
-  const ev=n.map((x,i)=>({m:x.m,l:x.l,start:x.start+LEAD,end:x.start+x.dur+LEAD,dur:x.dur,phrase:x.phrase||null,_i:i}));
+  const ev=n.map((x,i)=>({m:foldMidi(x.m+gameTranspose),l:x.l,start:x.start+LEAD,end:x.start+x.dur+LEAD,dur:x.dur,phrase:x.phrase||null,_i:i}));
   // Pre-build phrase → [note indices] map
   const phrases={};
   ev.forEach((e,i)=>{if(e.phrase){if(!phrases[e.phrase])phrases[e.phrase]=[];phrases[e.phrase].push(i);}});
@@ -450,11 +513,62 @@ function getMultiplier(){
   return 1;
 }
 
-async function launch(song){
+function launch(song){
+  pendingSong=song;
+  gameTranspose=0;
+  openPregame(song);
+}
+
+function openPregame(song){
+  $("pgTitle").textContent=song.title;
+  $("pgSub").textContent=song.sub+" · "+song.level;
+  updateKeyDisplay();
+  buildVoicePills();
+  show("pregame");
+}
+
+function songBaseKey(song){
+  // Detect tonic from song data: use most common pitch class weighted by duration
+  const n=normalize(song.notes);
+  const w=new Array(12).fill(0);
+  n.forEach(x=>w[((x.m%12)+12)%12]+=(x.dur||x.d||1));
+  let best=0;for(let i=1;i<12;i++)if(w[i]>w[best])best=i;
+  return best;
+}
+
+function updateKeyDisplay(){
+  const base=pendingSong?songBaseKey(pendingSong):2; // D default
+  const transposed=((base+gameTranspose)%12+12)%12;
+  const keyName=NN[transposed]+" major";
+  $("keyDisplay").textContent=keyName;
+  $("semitoneDisplay").textContent=gameTranspose===0?"Original key":
+    (gameTranspose>0?"+"+gameTranspose:" "+gameTranspose)+" semitone"+(Math.abs(gameTranspose)===1?"":"s");
+}
+
+function buildVoicePills(){
+  const wrap=$("voicePills");wrap.innerHTML="";
+  VOICE_RANGES.forEach(v=>{
+    const b=document.createElement("button");
+    b.className="pill"+(v.id===selectedVoice.id?" on":"");
+    b.innerHTML=`<strong>${v.label}</strong> <span style="opacity:.6;font-size:10px">${v.sub}</span>`;
+    b.onclick=()=>{
+      selectedVoice=v;
+      wrap.querySelectorAll(".pill").forEach(p=>p.classList.remove("on"));
+      b.classList.add("on");
+      $("voiceInfo").textContent="Range: "+v.sub+" · "+((v.max-v.min)+1)+" semitones";
+    };
+    wrap.appendChild(b);
+  });
+  $("voiceInfo").textContent="Range: "+selectedVoice.sub+" · "+((selectedVoice.max-selectedVoice.min)+1)+" semitones";
+}
+
+async function startGameWithSettings(){
+  MIN_MIDI=selectedVoice.min;
+  MAX_MIDI=selectedVoice.max;
   try{
     if(!audioCtx)await startMic();
     else if(audioCtx.state==="suspended")await audioCtx.resume();
-    startGame(song);
+    startGame(pendingSong);
   }catch(e){alert("Microphone access is needed to play.\n\n"+e.message+"\n\nOn phones, open this page over https.");}
 }
 
@@ -982,12 +1096,17 @@ document.addEventListener("keydown",e=>{
 });
 
 // ─── SCREEN ROUTING ──────────────────────────────────────────────────────────
-function show(id){for(const s of["home","play","result","create"]){const el=$(s);if(s==="play")el.classList.toggle("on",id==="play");else el.classList.toggle("on",id===s);}}
+function show(id){for(const s of["home","pregame","play","result","create"]){const el=$(s);if(s==="play")el.classList.toggle("on",id==="play");else el.classList.toggle("on",id===s);}}
 function renderSongs(){const w=$("songlist");w.innerHTML="";for(const s of SONGS){const el=document.createElement("button");el.className="song";el.innerHTML=`<div><h3>${s.title}</h3><p>${s.sub}</p></div><span class="lvl">${s.level}</span>`;el.onclick=()=>launch(s);w.appendChild(el);}}
 (function fillKeys(){const sel=$("keySel");NN.forEach((n,i)=>{const o=document.createElement("option");o.value=i;o.textContent=n+" major";sel.appendChild(o);});})();
 
 // ─── EVENT LISTENERS ─────────────────────────────────────────────────────────
-$("rAgain").onclick=()=>startGame(game.song);
+// Pre-game controls
+$("transposeDown").onclick=()=>{if(gameTranspose>-6)gameTranspose--;updateKeyDisplay();};
+$("transposeUp").onclick=()=>{if(gameTranspose<6)gameTranspose++;updateKeyDisplay();};
+$("pgStart").onclick=startGameWithSettings;
+
+$("rAgain").onclick=()=>{pendingSong=game.song;openPregame(game.song);};
 $("rHome").onclick=()=>show("home");
 $("goCreate").onclick=()=>{draftNotes=[];selected=-1;editorActive=false;$("editor").style.display="none";$("recStatus").textContent="";$("fileStatus").textContent="";show("create");};
 $("createBack").onclick=()=>show("home");
