@@ -31,17 +31,25 @@
   .homebtns{margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center;width:min(440px,92vw)}
   .hint{margin-top:22px;color:var(--muted);font-size:11px;max-width:340px;line-height:1.6}
   #play{display:none} #play.on{display:block}
-  .hud{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;justify-content:space-between;align-items:flex-start;padding:16px 18px;pointer-events:none}
-  .stat{background:rgba(11,16,38,.55);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:12px;padding:8px 12px}
+  /* HUD */
+  .hud{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;justify-content:space-between;align-items:flex-start;padding:12px 16px;pointer-events:none;gap:8px}
+  .stat{background:rgba(11,16,38,.7);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:12px;padding:7px 12px;min-width:70px}
   .stat .k{font-size:9px;color:var(--muted);letter-spacing:.14em;text-transform:uppercase}
-  .stat .val{font-size:22px;font-weight:500;color:var(--gold-soft);line-height:1.1}
+  .stat .val{font-size:20px;font-weight:500;color:var(--gold-soft);line-height:1.1}
   .stat.right{text-align:right}
+  .stat.center{text-align:center;flex:1}
   .streak{color:var(--hit)!important}
+  .mult-val{color:var(--gold)!important;font-size:22px!important}
   canvas{display:block}
   #cv{width:100vw;height:100vh}
-  .lyricbar{position:fixed;left:0;right:0;bottom:0;z-index:5;text-align:center;padding:18px 16px 30px;pointer-events:none;background:linear-gradient(0deg,rgba(11,16,38,.85),transparent)}
-  .lyricbar .now{font-family:"Fraunces",serif;font-size:clamp(26px,7vw,44px);font-weight:600}
-  .lyricbar .note{margin-top:6px;font-size:13px;color:var(--muted)}
+  /* Lyric / phrase bar */
+  .lyricbar{position:fixed;left:0;right:0;bottom:0;z-index:5;text-align:center;padding:14px 20px 28px;pointer-events:none;background:linear-gradient(0deg,rgba(11,16,38,.92) 60%,transparent)}
+  .phrase-line{font-family:"DM Mono",monospace;font-size:clamp(12px,2.8vw,16px);color:var(--muted);min-height:24px;margin-bottom:6px;line-height:1.6;letter-spacing:.02em}
+  .phrase-line .syl-cur{color:var(--gold);font-weight:500;text-shadow:0 0 14px rgba(240,180,41,.7)}
+  .phrase-line .syl-past{color:rgba(154,160,200,.3)}
+  .phrase-line .syl-fut{color:rgba(154,160,200,.65)}
+  .lyricbar .now{font-family:"Fraunces",serif;font-size:clamp(26px,6vw,42px);font-weight:600;min-height:44px}
+  .lyricbar .note-label{margin-top:4px;font-size:12px;color:var(--muted);min-height:18px}
   .cd{position:fixed;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;font-family:"Fraunces",serif;font-size:clamp(80px,28vw,200px);font-weight:800;color:var(--gold);pointer-events:none}
   .btn{font-family:"DM Mono",monospace;font-size:14px;cursor:pointer;border:none;border-radius:99px;padding:13px 24px;background:var(--gold);color:#241a00;font-weight:500;transition:.18s}
   .btn:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(240,180,41,.3)}
@@ -91,13 +99,15 @@
   .iconbtn{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:13px}
   .iconbtn:hover{border-color:var(--gold)}
   .empty{padding:24px;text-align:center;color:var(--muted);font-size:12px}
+  /* Score popup */
+  .score-popup{position:absolute;pointer-events:none;font-family:"Fraunces",serif;font-size:18px;font-weight:700;color:var(--hit);text-shadow:0 0 12px rgba(90,209,155,.8)}
 </style>
 </head>
 <body>
 
 <section id="home" class="screen on">
   <div class="brand"><span class="v">VOCAL</span><span class="h">hero</span></div>
-  <p class="tag">Sing into your phone. Match the pitch. Score points.</p>
+  <p class="tag">Sing into your phone. Match the pitch. Hold the note. Score big.</p>
   <div class="songlist" id="songlist"></div>
   <div class="homebtns">
     <button class="btn sm" id="goCreate">+ Create a song</button>
@@ -109,10 +119,15 @@
 <section id="play">
   <div class="hud">
     <div class="stat"><div class="k">Score</div><div class="val" id="hScore">0</div></div>
+    <div class="stat center"><div class="k">Multiplier</div><div class="val mult-val" id="hMult">1×</div></div>
     <div class="stat right"><div class="k">Streak</div><div class="val streak" id="hStreak">0</div></div>
   </div>
   <canvas id="cv"></canvas>
-  <div class="lyricbar"><div class="now" id="hLyric">&nbsp;</div><div class="note" id="hNote">&nbsp;</div></div>
+  <div class="lyricbar">
+    <div class="phrase-line" id="hPhrase">&nbsp;</div>
+    <div class="now" id="hLyric">&nbsp;</div>
+    <div class="note-label" id="hNote">&nbsp;</div>
+  </div>
   <div class="cd" id="cd"></div>
 </section>
 
@@ -200,37 +215,156 @@
 </section>
 
 <script>
+// ─── SONG DATA ───────────────────────────────────────────────────────────────
 const SONGS=[
   {id:"scale",title:"Warm-Up Scale",sub:"Five notes up and down",level:"Easy",
    notes:[{m:60,d:.8,l:"do"},{m:62,d:.8,l:"re"},{m:64,d:.8,l:"mi"},{m:65,d:.8,l:"fa"},{m:67,d:1.2,l:"sol"},{m:65,d:.8,l:"fa"},{m:64,d:.8,l:"mi"},{m:62,d:.8,l:"re"},{m:60,d:1.4,l:"do"}]},
   {id:"grace",title:"Amazing Grace",sub:"Traditional · opening line",level:"Medium",
    notes:[{m:62,d:.8,l:"A"},{m:67,d:1.4,l:"maz"},{m:71,d:.7,l:"ing"},{m:67,d:.7,l:"grace"},{m:71,d:1.4,l:"how"},{m:69,d:1.4,l:"sweet"},{m:67,d:1.4,l:"the"},{m:64,d:1.6,l:"sound"}]},
   {id:"dox",title:"Doxology",sub:"Old Hundredth · approx.",level:"Medium",
-   notes:[{m:67,d:1,l:"Praise"},{m:67,d:1,l:"God"},{m:69,d:1,l:"from"},{m:67,d:1,l:"whom"},{m:72,d:1,l:"all"},{m:71,d:1,l:"bless"},{m:69,d:1,l:"ings"},{m:67,d:1.6,l:"flow"}]}
+   notes:[{m:67,d:1,l:"Praise"},{m:67,d:1,l:"God"},{m:69,d:1,l:"from"},{m:67,d:1,l:"whom"},{m:72,d:1,l:"all"},{m:71,d:1,l:"bless"},{m:69,d:1,l:"ings"},{m:67,d:1.6,l:"flow"}]},
+
+  // ── Great Is Thy Faithfulness (D major, BPM ≈ 76, 3/4 time) ──────────────
+  {id:"greatfaith",title:"Great Is Thy Faithfulness",sub:"William M. Runyan · Hymn · Full chorus",level:"Medium",
+   notes:[
+    // VERSE 1 — "Great is Thy faithfulness,"
+    {m:62,start:0.00, dur:1.05,l:"Great",  phrase:"Great is Thy faithfulness,"},
+    {m:66,start:1.05, dur:0.42,l:"is",     phrase:"Great is Thy faithfulness,"},
+    {m:69,start:1.47, dur:0.84,l:"Thy",    phrase:"Great is Thy faithfulness,"},
+    {m:69,start:2.31, dur:0.84,l:"faith-", phrase:"Great is Thy faithfulness,"},
+    {m:67,start:3.15, dur:0.84,l:"-ful-",  phrase:"Great is Thy faithfulness,"},
+    {m:66,start:3.99, dur:2.36,l:"-ness,", phrase:"Great is Thy faithfulness,"},
+    // "O God my Father"
+    {m:64,start:7.09, dur:0.84,l:"O",      phrase:"O God my Father"},
+    {m:66,start:7.93, dur:0.84,l:"God",    phrase:"O God my Father"},
+    {m:69,start:8.77, dur:0.84,l:"my",     phrase:"O God my Father"},
+    {m:74,start:9.61, dur:1.26,l:"Fa-",    phrase:"O God my Father"},
+    {m:69,start:10.87,dur:2.52,l:"-ther",  phrase:"O God my Father"},
+    // "There is no shadow of turning with Thee"
+    {m:69,start:14.17,dur:0.42,l:"There",  phrase:"There is no shadow of turning with Thee"},
+    {m:69,start:14.59,dur:0.42,l:"is",     phrase:"There is no shadow of turning with Thee"},
+    {m:71,start:15.01,dur:0.42,l:"no",     phrase:"There is no shadow of turning with Thee"},
+    {m:69,start:15.43,dur:0.42,l:"sha-",   phrase:"There is no shadow of turning with Thee"},
+    {m:67,start:15.85,dur:0.42,l:"-dow",   phrase:"There is no shadow of turning with Thee"},
+    {m:66,start:16.27,dur:0.42,l:"of",     phrase:"There is no shadow of turning with Thee"},
+    {m:64,start:16.69,dur:0.42,l:"turn-",  phrase:"There is no shadow of turning with Thee"},
+    {m:62,start:17.11,dur:0.42,l:"-ing",   phrase:"There is no shadow of turning with Thee"},
+    {m:64,start:17.53,dur:0.42,l:"with",   phrase:"There is no shadow of turning with Thee"},
+    {m:66,start:17.95,dur:2.52,l:"Thee",   phrase:"There is no shadow of turning with Thee"},
+    // "Thou changest not, Thy compassions they fail not"
+    {m:69,start:21.25,dur:0.42,l:"Thou",   phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:69,start:21.67,dur:0.42,l:"chang-", phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:71,start:22.09,dur:0.42,l:"-est",   phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:69,start:22.51,dur:0.42,l:"not,",   phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:67,start:22.93,dur:0.42,l:"Thy",    phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:66,start:23.35,dur:0.42,l:"com-",   phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:67,start:23.77,dur:0.42,l:"-pas-",  phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:69,start:24.19,dur:0.42,l:"-sions", phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:71,start:24.61,dur:0.42,l:"they",   phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:69,start:25.03,dur:0.42,l:"fail",   phrase:"Thou changest not, Thy compassions they fail not"},
+    {m:67,start:25.45,dur:2.52,l:"not",    phrase:"Thou changest not, Thy compassions they fail not"},
+    // "As Thou hast been, Thou forever wilt be"
+    {m:66,start:28.75,dur:0.42,l:"As",     phrase:"As Thou hast been, Thou forever wilt be"},
+    {m:69,start:29.17,dur:0.42,l:"Thou",   phrase:"As Thou hast been, Thou forever wilt be"},
+    {m:74,start:29.59,dur:1.26,l:"hast",   phrase:"As Thou hast been, Thou forever wilt be"},
+    {m:73,start:30.85,dur:1.26,l:"been,",  phrase:"As Thou hast been, Thou forever wilt be"},
+    {m:71,start:32.11,dur:0.42,l:"Thou",   phrase:"As Thou hast been, Thou forever wilt be"},
+    {m:69,start:32.53,dur:0.42,l:"for-",   phrase:"As Thou hast been, Thou forever wilt be"},
+    {m:67,start:32.95,dur:0.42,l:"-ev-",   phrase:"As Thou hast been, Thou forever wilt be"},
+    {m:66,start:33.37,dur:0.42,l:"-er",    phrase:"As Thou hast been, Thou forever wilt be"},
+    {m:64,start:33.79,dur:0.42,l:"wilt",   phrase:"As Thou hast been, Thou forever wilt be"},
+    {m:62,start:34.21,dur:2.52,l:"be",     phrase:"As Thou hast been, Thou forever wilt be"},
+    // CHORUS — "Great is Thy faithfulness!" (high)
+    {m:74,start:37.51,dur:1.26,l:"Great",  phrase:"Great is Thy faithfulness!"},
+    {m:73,start:38.77,dur:0.42,l:"is",     phrase:"Great is Thy faithfulness!"},
+    {m:71,start:39.19,dur:0.84,l:"Thy",    phrase:"Great is Thy faithfulness!"},
+    {m:69,start:40.03,dur:0.84,l:"faith-", phrase:"Great is Thy faithfulness!"},
+    {m:67,start:40.87,dur:0.84,l:"-ful-",  phrase:"Great is Thy faithfulness!"},
+    {m:66,start:41.71,dur:2.52,l:"-ness!", phrase:"Great is Thy faithfulness!"},
+    // "Great is Thy faithfulness!" (low echo)
+    {m:69,start:45.01,dur:1.26,l:"Great",  phrase:"Great is Thy faithfulness!"},
+    {m:67,start:46.27,dur:0.42,l:"is",     phrase:"Great is Thy faithfulness!"},
+    {m:66,start:46.69,dur:0.84,l:"Thy",    phrase:"Great is Thy faithfulness!"},
+    {m:64,start:47.53,dur:0.84,l:"faith-", phrase:"Great is Thy faithfulness!"},
+    {m:62,start:48.37,dur:0.84,l:"-ful-",  phrase:"Great is Thy faithfulness!"},
+    {m:62,start:49.21,dur:2.52,l:"-ness!", phrase:"Great is Thy faithfulness!"},
+    // "Morning by morning new mercies I see"
+    {m:74,start:52.51,dur:0.84,l:"Morn-",  phrase:"Morning by morning new mercies I see"},
+    {m:73,start:53.35,dur:0.42,l:"-ing",   phrase:"Morning by morning new mercies I see"},
+    {m:71,start:53.77,dur:0.42,l:"by",     phrase:"Morning by morning new mercies I see"},
+    {m:69,start:54.19,dur:0.84,l:"morn-",  phrase:"Morning by morning new mercies I see"},
+    {m:67,start:55.03,dur:0.42,l:"-ing",   phrase:"Morning by morning new mercies I see"},
+    {m:69,start:55.45,dur:0.42,l:"new",    phrase:"Morning by morning new mercies I see"},
+    {m:71,start:55.87,dur:0.42,l:"mer-",   phrase:"Morning by morning new mercies I see"},
+    {m:69,start:56.29,dur:0.42,l:"-cies",  phrase:"Morning by morning new mercies I see"},
+    {m:67,start:56.71,dur:0.42,l:"I",      phrase:"Morning by morning new mercies I see"},
+    {m:66,start:57.13,dur:2.52,l:"see",    phrase:"Morning by morning new mercies I see"},
+    // "All I have needed Thy hand hath provided"
+    {m:62,start:60.43,dur:0.42,l:"All",    phrase:"All I have needed Thy hand hath provided"},
+    {m:64,start:60.85,dur:0.42,l:"I",      phrase:"All I have needed Thy hand hath provided"},
+    {m:66,start:61.27,dur:0.42,l:"have",   phrase:"All I have needed Thy hand hath provided"},
+    {m:69,start:61.69,dur:0.42,l:"need-",  phrase:"All I have needed Thy hand hath provided"},
+    {m:67,start:62.11,dur:0.42,l:"-ed",    phrase:"All I have needed Thy hand hath provided"},
+    {m:66,start:62.53,dur:0.42,l:"Thy",    phrase:"All I have needed Thy hand hath provided"},
+    {m:64,start:62.95,dur:0.42,l:"hand",   phrase:"All I have needed Thy hand hath provided"},
+    {m:62,start:63.37,dur:0.42,l:"hath",   phrase:"All I have needed Thy hand hath provided"},
+    {m:64,start:63.79,dur:0.42,l:"pro-",   phrase:"All I have needed Thy hand hath provided"},
+    {m:66,start:64.21,dur:0.42,l:"-vid-",  phrase:"All I have needed Thy hand hath provided"},
+    {m:67,start:64.63,dur:2.52,l:"-ed",    phrase:"All I have needed Thy hand hath provided"},
+    // "Great is Thy faithfulness, Lord, unto me!"
+    {m:74,start:67.93,dur:1.26,l:"Great",  phrase:"Great is Thy faithfulness, Lord, unto me!"},
+    {m:73,start:69.19,dur:0.42,l:"is",     phrase:"Great is Thy faithfulness, Lord, unto me!"},
+    {m:71,start:69.61,dur:0.84,l:"Thy",    phrase:"Great is Thy faithfulness, Lord, unto me!"},
+    {m:69,start:70.45,dur:0.84,l:"faith-", phrase:"Great is Thy faithfulness, Lord, unto me!"},
+    {m:67,start:71.29,dur:0.84,l:"-ful-",  phrase:"Great is Thy faithfulness, Lord, unto me!"},
+    {m:66,start:72.13,dur:1.26,l:"-ness,", phrase:"Great is Thy faithfulness, Lord, unto me!"},
+    {m:67,start:73.39,dur:0.42,l:"Lord,",  phrase:"Great is Thy faithfulness, Lord, unto me!"},
+    {m:69,start:73.81,dur:0.84,l:"un-",    phrase:"Great is Thy faithfulness, Lord, unto me!"},
+    {m:71,start:74.65,dur:0.84,l:"-to",    phrase:"Great is Thy faithfulness, Lord, unto me!"},
+    {m:62,start:75.49,dur:3.36,l:"me!",    phrase:"Great is Thy faithfulness, Lord, unto me!"},
+  ]}
 ];
 
+// ─── UTILITIES ────────────────────────────────────────────────────────────────
 const $=id=>document.getElementById(id);
 const midiToFreq=m=>440*Math.pow(2,(m-69)/12);
 const freqToMidi=f=>69+12*Math.log2(f/440);
 const NN=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 const noteName=m=>{const r=Math.round(m);return NN[((r%12)+12)%12]+(Math.floor(r/12)-1);};
-const MIN_MIDI=55,MAX_MIDI=79,HIT_TOL=1.0,PARTIAL_TOL=2.0;
+const MIN_MIDI=55,MAX_MIDI=79,HIT_TOL=1.2,PARTIAL_TOL=2.5;
 const SCALE=[0,2,4,5,7,9,11];
 const foldMidi=m=>{while(m<MIN_MIDI-1)m+=12;while(m>MAX_MIDI+1)m-=12;return Math.min(MAX_MIDI,Math.max(MIN_MIDI,m));};
 
 function normalize(notes){
-  if(notes.length&&notes[0].start!=null)return notes.map(n=>({m:n.m,start:n.start,dur:n.dur!=null?n.dur:n.d,l:n.l||"la"}));
-  let t=0;const out=[];for(const n of notes){out.push({m:n.m,start:t,dur:n.d,l:n.l||"la"});t+=n.d;}return out;
+  if(notes.length&&notes[0].start!=null)
+    return notes.map(n=>({...n,m:n.m,start:n.start,dur:n.dur!=null?n.dur:n.d,l:n.l||"la"}));
+  let t=0;const out=[];
+  for(const n of notes){out.push({...n,m:n.m,start:t,dur:n.d,l:n.l||"la"});t+=n.d;}
+  return out;
 }
 
+// ─── AUDIO / PITCH ───────────────────────────────────────────────────────────
 let audioCtx,analyser,micStream,timeBuf;
-async function startMic(){audioCtx=new (window.AudioContext||window.webkitAudioContext)();micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});const s=audioCtx.createMediaStreamSource(micStream);analyser=audioCtx.createAnalyser();analyser.fftSize=2048;s.connect(analyser);timeBuf=new Float32Array(analyser.fftSize);}
+async function startMic(){
+  audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  const s=audioCtx.createMediaStreamSource(micStream);
+  analyser=audioCtx.createAnalyser();analyser.fftSize=2048;
+  s.connect(analyser);timeBuf=new Float32Array(analyser.fftSize);
+}
 function detectPitch(buf,sr){
-  let SIZE=buf.length,rms=0;for(let i=0;i<SIZE;i++){const v=buf[i];rms+=v*v;}rms=Math.sqrt(rms/SIZE);if(rms<0.012)return -1;
-  let r1=0,r2=SIZE-1;const th=0.2;for(let i=0;i<SIZE/2;i++){if(Math.abs(buf[i])<th){r1=i;break;}}for(let i=1;i<SIZE/2;i++){if(Math.abs(buf[SIZE-i])<th){r2=SIZE-i;break;}}
-  const b=buf.slice(r1,r2);SIZE=b.length;if(SIZE<32)return -1;const c=new Float32Array(SIZE);for(let i=0;i<SIZE;i++)for(let j=0;j<SIZE-i;j++)c[i]+=b[j]*b[j+i];
-  let d=0;while(d<SIZE-1&&c[d]>c[d+1])d++;let mv=-1,mp=-1;for(let i=d;i<SIZE;i++){if(c[i]>mv){mv=c[i];mp=i;}}
-  let T0=mp;const x1=c[T0-1]||0,x2=c[T0]||0,x3=c[T0+1]||0,a=(x1+x3-2*x2)/2,bb=(x3-x1)/2;if(a)T0=T0-bb/(2*a);const f=sr/T0;if(f<70||f>1200)return -1;return f;
+  let SIZE=buf.length,rms=0;for(let i=0;i<SIZE;i++){const v=buf[i];rms+=v*v;}rms=Math.sqrt(rms/SIZE);
+  if(rms<0.012)return -1;
+  let r1=0,r2=SIZE-1;const th=0.2;
+  for(let i=0;i<SIZE/2;i++){if(Math.abs(buf[i])<th){r1=i;break;}}
+  for(let i=1;i<SIZE/2;i++){if(Math.abs(buf[SIZE-i])<th){r2=SIZE-i;break;}}
+  const b=buf.slice(r1,r2);SIZE=b.length;if(SIZE<32)return -1;
+  const c=new Float32Array(SIZE);
+  for(let i=0;i<SIZE;i++)for(let j=0;j<SIZE-i;j++)c[i]+=b[j]*b[j+i];
+  let d=0;while(d<SIZE-1&&c[d]>c[d+1])d++;
+  let mv=-1,mp=-1;for(let i=d;i<SIZE;i++){if(c[i]>mv){mv=c[i];mp=i;}}
+  let T0=mp;const x1=c[T0-1]||0,x2=c[T0]||0,x3=c[T0+1]||0,a=(x1+x3-2*x2)/2,bb=(x3-x1)/2;
+  if(a)T0=T0-bb/(2*a);const f=sr/T0;if(f<70||f>1200)return -1;return f;
 }
 function smoothSamples(s){return s.map((x,i)=>{const w=[s[i-1],s[i],s[i+1]].filter(v=>v&&v.midi!=null).map(v=>v.midi);if(!w.length)return{t:x.t,midi:null};w.sort((a,b)=>a-b);return{t:x.t,midi:w[w.length>>1]};});}
 function samplesToNotes(samples){
@@ -243,38 +377,361 @@ function samplesToNotes(samples){
   return notes;
 }
 
+// ─── CANVAS / RESIZE ─────────────────────────────────────────────────────────
 const cv=$("cv"),ctx=cv.getContext("2d");let DPR=1,W=0,H=0;
 function resize(){DPR=Math.min(devicePixelRatio||1,2);W=cv.clientWidth;H=cv.clientHeight;cv.width=W*DPR;cv.height=H*DPR;ctx.setTransform(DPR,0,0,DPR,0,0);}
 window.addEventListener("resize",()=>{resize();if($("create").classList.contains("on")&&editorActive){sizeRoll();drawRoll();}});
-let game=null;const NOW_X=0.28,PXS=150,LEAD=2.2;
-function buildTimeline(song){const n=normalize(song.notes).slice().sort((a,b)=>a.start-b.start);const ev=n.map(x=>({m:x.m,l:x.l,start:x.start+LEAD,end:x.start+x.dur+LEAD}));const total=ev.length?Math.max(...ev.map(e=>e.end)):LEAD;return{events:ev,total};}
+
+// ─── GAME ENGINE ──────────────────────────────────────────────────────────────
+let game=null;
+const NOW_X=0.22;   // hit line at 22% from left
+const PXS=130;      // pixels per second
+const LEAD=2.8;     // seconds of lead-in before first note
+
+function buildTimeline(song){
+  const n=normalize(song.notes).slice().sort((a,b)=>a.start-b.start);
+  const ev=n.map((x,i)=>({m:x.m,l:x.l,start:x.start+LEAD,end:x.start+x.dur+LEAD,dur:x.dur,phrase:x.phrase||null,_i:i}));
+  // Pre-build phrase → [note indices] map
+  const phrases={};
+  ev.forEach((e,i)=>{if(e.phrase){if(!phrases[e.phrase])phrases[e.phrase]=[];phrases[e.phrase].push(i);}});
+  const total=ev.length?Math.max(...ev.map(e=>e.end)):LEAD;
+  return{events:ev,total,phrases};
+}
+
 function midiToY(m){return H-((m-MIN_MIDI)/(MAX_MIDI-MIN_MIDI))*H;}
-async function launch(song){try{if(!audioCtx)await startMic();else if(audioCtx.state==="suspended")await audioCtx.resume();startGame(song);}catch(e){alert("Microphone access is needed to play.\n\n"+e.message+"\n\nOn phones, open this page over https.");}}
-function startGame(song){resize();show("play");game={song,tl:buildTimeline(song),score:0,streak:0,best:0,hf:0,sf:0,hits:new Set(),um:null,trail:[],t0:0,state:"cd"};$("hScore").textContent="0";$("hStreak").textContent="0";let n=3;$("cd").textContent=n;const iv=setInterval(()=>{n--;if(n<=0){clearInterval(iv);$("cd").textContent="";game.state="play";game.t0=performance.now();requestAnimationFrame(loop);}else $("cd").textContent=n;},800);}
-function loop(now){
-  if(!game||game.state!=="play")return;const el=(now-game.t0)/1000;
-  let um=null;if(analyser){analyser.getFloatTimeDomainData(timeBuf);const f=detectPitch(timeBuf,audioCtx.sampleRate);if(f>0)um=foldMidi(freqToMidi(f));}
-  if(um!=null)game.um=game.um==null?um:game.um*0.6+um*0.4;else game.um=null;
-  let act=null;for(let i=0;i<game.tl.events.length;i++){const e=game.tl.events[i];if(el>=e.start&&el<e.end){act=e;act._i=i;break;}}
-  if(act){game.sf++;if(game.um!=null){const df=Math.abs(game.um-act.m);if(df<=HIT_TOL){game.hf++;game.streak++;game.best=Math.max(game.best,game.streak);game.score+=10+Math.min(game.streak,20);game.hits.add(act._i);}else if(df<=PARTIAL_TOL)game.score+=3;else game.streak=0;}else game.streak=0;}
+
+function getMultiplier(){
+  if(!game)return 1;
+  if(game.streak>=16)return 4;
+  if(game.streak>=10)return 3;
+  if(game.streak>=5)return 2;
+  return 1;
+}
+
+async function launch(song){
+  try{
+    if(!audioCtx)await startMic();
+    else if(audioCtx.state==="suspended")await audioCtx.resume();
+    startGame(song);
+  }catch(e){alert("Microphone access is needed to play.\n\n"+e.message+"\n\nOn phones, open this page over https.");}
+}
+
+function startGame(song){
+  resize();show("play");
+  game={
+    song,
+    tl:buildTimeline(song),
+    score:0,streak:0,best:0,hf:0,sf:0,
+    hits:new Set(),
+    noteState:new Map(),  // idx → {frames, total}
+    lastActIdx:-1,
+    popups:[],            // floating score text
+    um:null,trail:[],
+    t0:0,state:"cd"
+  };
+  $("hScore").textContent="0";$("hStreak").textContent="0";$("hMult").textContent="1×";
+  let n=3;$("cd").textContent=n;
+  const iv=setInterval(()=>{
+    n--;
+    if(n<=0){clearInterval(iv);$("cd").textContent="";game.state="play";game.t0=performance.now();requestAnimationFrame(gameLoop);}
+    else $("cd").textContent=n;
+  },800);
+}
+
+function finalizeNote(idx){
+  if(idx<0||!game)return;
+  const ns=game.noteState.get(idx);
+  if(!ns||ns.total===0)return;
+  const pct=ns.frames/ns.total;
+  const e=game.tl.events[idx];
+  game.sf+=ns.total;game.hf+=ns.frames;
+  const mult=getMultiplier();
+  // Points: 100 base × hold% × multiplier × duration bonus
+  const pts=Math.max(0,Math.round(100*pct*mult*(1+e.dur*0.4)));
+  game.score+=pts;
+  if(pct>=0.55){
+    game.streak++;game.best=Math.max(game.best,game.streak);game.hits.add(idx);
+    if(pts>0)game.popups.push({pts,x:W*NOW_X,y:midiToY(e.m),life:0,col:pct>=0.85?"#5ad19b":"#ffd97a"});
+  }else{
+    game.streak=0;
+  }
+}
+
+function gameLoop(now){
+  if(!game||game.state!=="play")return;
+  const el=(now-game.t0)/1000;
+
+  // Pitch detection
+  let um=null;
+  if(analyser){analyser.getFloatTimeDomainData(timeBuf);const f=detectPitch(timeBuf,audioCtx.sampleRate);if(f>0)um=foldMidi(freqToMidi(f));}
+  if(um!=null)game.um=game.um==null?um:game.um*0.55+um*0.45;
+  else game.um=null;
+
+  // Find active note (first note whose window contains el)
+  let act=null;
+  for(let i=0;i<game.tl.events.length;i++){
+    const e=game.tl.events[i];
+    if(el>=e.start&&el<e.end){act=e;act._i=i;break;}
+  }
+  const actIdx=act?act._i:-1;
+
+  // Transition: finalize previous note
+  if(actIdx!==game.lastActIdx){
+    finalizeNote(game.lastActIdx);
+    game.lastActIdx=actIdx;
+  }
+
+  // Accumulate hold progress for active note
+  if(actIdx>=0){
+    if(!game.noteState.has(actIdx))game.noteState.set(actIdx,{frames:0,total:0});
+    const ns=game.noteState.get(actIdx);
+    ns.total++;
+    if(game.um!=null&&Math.abs(game.um-act.m)<=HIT_TOL)ns.frames++;
+  }
+
+  // Trail for singer pitch history
+  game.trail.push(game.um);if(game.trail.length>80)game.trail.shift();
+
   drawGame(el,act);
-  $("hScore").textContent=game.score;$("hStreak").textContent=game.streak;$("hLyric").innerHTML=act?act.l:"&nbsp;";$("hNote").textContent=game.um!=null?"you: "+noteName(game.um):(act?"sing "+noteName(act.m):"");
-  if(el>game.tl.total+0.8){endGame();return;}requestAnimationFrame(loop);
+  updateHUD(el,act);
+
+  if(el>game.tl.total+1.2){endGame();return;}
+  requestAnimationFrame(gameLoop);
 }
+
+// ─── DRAW ─────────────────────────────────────────────────────────────────────
+function rr(c,x,y,w,h,r){
+  if(w<=0)return;
+  r=Math.min(r,h/2,w/2);
+  c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();
+}
+
 function drawGame(el,act){
-  ctx.clearRect(0,0,W,H);const nx=W*NOW_X;ctx.lineWidth=1;
-  for(let m=MIN_MIDI;m<=MAX_MIDI;m+=2){const y=midiToY(m);ctx.strokeStyle="rgba(44,52,112,.5)";ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle="rgba(154,160,200,.45)";ctx.font="10px 'DM Mono'";ctx.fillText(noteName(m),6,y-4);}
-  for(let i=0;i<game.tl.events.length;i++){const e=game.tl.events[i];const x1=nx+(e.start-el)*PXS,x2=nx+(e.end-el)*PXS;if(x2<0||x1>W)continue;const y=midiToY(e.m),h=16,a=(e===act),hit=game.hits.has(i);ctx.fillStyle=hit?"rgba(90,209,155,.85)":a?"rgba(240,180,41,.95)":"rgba(120,130,210,.55)";rr(ctx,x1,y-h/2,Math.max(x2-x1,6),h,8);ctx.fill();if(a){ctx.shadowColor="rgba(240,180,41,.6)";ctx.shadowBlur=18;ctx.fill();ctx.shadowBlur=0;}ctx.fillStyle="rgba(244,241,230,.65)";ctx.font="11px 'DM Mono'";ctx.fillText(e.l,x1,y+h/2+14);}
-  ctx.strokeStyle="rgba(255,217,122,.5)";ctx.lineWidth=2;ctx.setLineDash([4,6]);ctx.beginPath();ctx.moveTo(nx,0);ctx.lineTo(nx,H);ctx.stroke();ctx.setLineDash([]);
-  game.trail.push(game.um);if(game.trail.length>60)game.trail.shift();ctx.lineWidth=3;ctx.strokeStyle="rgba(255,255,255,.25)";ctx.beginPath();let st=false;
-  for(let i=0;i<game.trail.length;i++){const m=game.trail[i];if(m==null){st=false;continue;}const x=nx-(game.trail.length-1-i)*4,y=midiToY(m);if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);}ctx.stroke();
-  if(game.um!=null){const y=midiToY(game.um);const on=act&&Math.abs(game.um-act.m)<=HIT_TOL;ctx.fillStyle=on?"#5ad19b":"#f4f1e6";ctx.shadowColor=on?"rgba(90,209,155,.9)":"rgba(244,241,230,.5)";ctx.shadowBlur=20;ctx.beginPath();ctx.arc(nx,y,10,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;}
+  ctx.clearRect(0,0,W,H);
+  const nx=W*NOW_X;
+  const NOTE_H=20;
+
+  // ── Pitch lane background ──
+  for(let m=MIN_MIDI;m<=MAX_MIDI;m++){
+    const y=midiToY(m);
+    const rowH=H/(MAX_MIDI-MIN_MIDI);
+    const pc=(((m-0)%12)+12)%12;// songKey=0 for generic
+    const isBlack=[1,3,6,8,10].includes(pc);
+    ctx.fillStyle=isBlack?"rgba(8,11,32,.5)":"rgba(18,22,55,.4)";
+    ctx.fillRect(0,y-rowH/2,W,rowH);
+  }
+
+  // ── Horizontal pitch guide lines ──
+  ctx.lineWidth=1;
+  for(let m=MIN_MIDI;m<=MAX_MIDI;m+=2){
+    const y=midiToY(m);
+    ctx.strokeStyle="rgba(44,52,112,.4)";
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
+    ctx.fillStyle="rgba(154,160,200,.5)";
+    ctx.font="9px 'DM Mono'";ctx.fillText(noteName(m),4,y-3);
+  }
+
+  // ── Upcoming note approach glow (warn lines behind notes) ──
+  for(let i=0;i<game.tl.events.length;i++){
+    const e=game.tl.events[i];
+    const x1=nx+(e.start-el)*PXS;
+    if(x1>W||nx+(e.end-el)*PXS<0)continue;
+    // Subtle glow approaching the hit line
+    if(x1>nx&&x1<nx+200){
+      const alpha=(1-(x1-nx)/200)*0.15;
+      const y=midiToY(e.m);
+      const grad=ctx.createLinearGradient(nx,0,x1,0);
+      grad.addColorStop(0,`rgba(240,180,41,${alpha})`);
+      grad.addColorStop(1,"rgba(240,180,41,0)");
+      ctx.fillStyle=grad;
+      ctx.fillRect(nx,y-NOTE_H/2,x1-nx,NOTE_H);
+    }
+  }
+
+  // ── Note bars ──
+  for(let i=0;i<game.tl.events.length;i++){
+    const e=game.tl.events[i];
+    const x1=nx+(e.start-el)*PXS;
+    const x2=nx+(e.end-el)*PXS;
+    if(x2<-10||x1>W+10)continue;
+    const y=midiToY(e.m);
+    const isAct=(i===game.lastActIdx);
+    const isHit=game.hits.has(i);
+    const isPast=x2<=nx;
+    const ns=game.noteState.get(i);
+    const holdPct=ns&&ns.total>0?ns.frames/ns.total:0;
+
+    // Shadow for active note
+    if(isAct){ctx.shadowColor="rgba(240,180,41,.5)";ctx.shadowBlur=22;}
+
+    // Base bar — dim for future, coloured for active/past
+    if(isPast){
+      ctx.fillStyle=isHit?"rgba(90,209,155,.35)":"rgba(224,90,107,.25)";
+    }else if(isAct){
+      ctx.fillStyle="rgba(50,60,130,.85)";
+    }else{
+      // Upcoming: shade by how soon
+      const dist=x1-nx;
+      const alpha=Math.max(0.25,Math.min(0.7,1-dist/600));
+      ctx.fillStyle=`rgba(100,110,200,${alpha})`;
+    }
+    rr(ctx,x1,y-NOTE_H/2,Math.max(x2-x1,6),NOTE_H,NOTE_H/2);
+    ctx.fill();
+    ctx.shadowBlur=0;
+
+    if(!isPast){
+      // LEFT of NOW_X = already-passed portion → show hold feedback
+      if(x1<nx){
+        const passedW=Math.min(nx,x2)-x1;
+        if(passedW>0){
+          ctx.fillStyle=holdPct>=0.55?"rgba(90,209,155,.85)":"rgba(224,90,107,.7)";
+          rr(ctx,x1,y-NOTE_H/2,passedW,NOTE_H,NOTE_H/2);
+          ctx.fill();
+        }
+      }
+      // RIGHT of NOW_X = upcoming tail — bright gold if active
+      if(isAct&&x2>nx){
+        const tailX=Math.max(x1,nx);
+        ctx.fillStyle="rgba(240,180,41,.9)";
+        if(isAct){ctx.shadowColor="rgba(240,180,41,.7)";ctx.shadowBlur=14;}
+        rr(ctx,tailX,y-NOTE_H/2+3,x2-tailX,NOTE_H-6,NOTE_H/2);
+        ctx.fill();ctx.shadowBlur=0;
+      }
+    }
+
+    // Lyric text below bar
+    const lyrX=Math.max(x1+4,4);
+    if(lyrX<W-4){
+      ctx.fillStyle=isAct?"rgba(255,217,122,.95)":"rgba(244,241,230,.55)";
+      ctx.font=`${isAct?"bold ":""}11px 'DM Mono'`;
+      ctx.fillText(e.l,lyrX,y+NOTE_H/2+13);
+    }
+
+    // Note border highlight
+    ctx.strokeStyle=isAct?"rgba(240,180,41,.6)":isPast?(isHit?"rgba(90,209,155,.3)":"rgba(224,90,107,.2)"):"rgba(80,90,180,.5)";
+    ctx.lineWidth=isAct?2:1;
+    rr(ctx,x1,y-NOTE_H/2,Math.max(x2-x1,6),NOTE_H,NOTE_H/2);
+    ctx.stroke();
+  }
+
+  // ── Hit line (NOW_X) ──
+  const lineGrad=ctx.createLinearGradient(nx-3,0,nx+3,0);
+  lineGrad.addColorStop(0,"rgba(240,180,41,0)");
+  lineGrad.addColorStop(0.5,"rgba(240,180,41,.85)");
+  lineGrad.addColorStop(1,"rgba(240,180,41,0)");
+  ctx.strokeStyle=lineGrad;
+  ctx.lineWidth=3;ctx.setLineDash([]);
+  ctx.beginPath();ctx.moveTo(nx,0);ctx.lineTo(nx,H);ctx.stroke();
+
+  // ── Singer pitch trail ──
+  ctx.lineWidth=2.5;
+  ctx.strokeStyle="rgba(255,255,255,.2)";
+  ctx.beginPath();let trailStarted=false;
+  for(let i=0;i<game.trail.length;i++){
+    const m=game.trail[i];if(m==null){trailStarted=false;continue;}
+    const x=nx-(game.trail.length-1-i)*3,y=midiToY(m);
+    if(!trailStarted){ctx.moveTo(x,y);trailStarted=true;}else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+
+  // ── Singer dot ──
+  if(game.um!=null){
+    const y=midiToY(game.um);
+    const onPitch=act&&Math.abs(game.um-act.m)<=HIT_TOL;
+    const partialPitch=!onPitch&&act&&Math.abs(game.um-act.m)<=PARTIAL_TOL;
+    const col=onPitch?"#5ad19b":partialPitch?"#ffd97a":"#f4f1e6";
+    // Outer glow ring
+    ctx.beginPath();ctx.arc(nx,y,18,0,Math.PI*2);
+    ctx.fillStyle=onPitch?"rgba(90,209,155,.15)":partialPitch?"rgba(255,217,122,.1)":"rgba(255,255,255,.05)";ctx.fill();
+    // Main dot
+    ctx.beginPath();ctx.arc(nx,y,9,0,Math.PI*2);
+    ctx.fillStyle=col;
+    ctx.shadowColor=col;ctx.shadowBlur=onPitch?24:10;
+    ctx.fill();ctx.shadowBlur=0;
+  }
+
+  // ── Score popups ──
+  game.popups=game.popups.filter(p=>p.life<55);
+  ctx.save();
+  game.popups.forEach(p=>{
+    p.life++;
+    ctx.globalAlpha=1-p.life/55;
+    ctx.fillStyle=p.col;
+    ctx.font="bold 16px 'DM Mono'";
+    ctx.fillText("+"+p.pts, p.x+18, p.y-p.life*1.8);
+  });
+  ctx.restore();
 }
-function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
-function endGame(){game.state="done";const acc=game.sf?Math.round(100*game.hf/game.sf):0;$("rGrade").textContent=acc>=85?"A+":acc>=70?"A":acc>=55?"B":acc>=40?"C":"Keep going";$("rScore").textContent=game.score+" pts";$("rAcc").textContent=acc+"%";$("rStreak").textContent=game.best;$("rHits").textContent=game.hits.size+" / "+game.song.notes.length;show("result");}
 
-function previewNotes(notes){const n=normalize(notes).slice().sort((a,b)=>a.start-b.start);if(!n.length)return;const ac=new (window.AudioContext||window.webkitAudioContext)();const t0=ac.currentTime+0.1;for(const x of n){const o=ac.createOscillator(),g=ac.createGain();o.type="triangle";o.frequency.value=midiToFreq(x.m);const st=t0+x.start;g.gain.setValueAtTime(0.0001,st);g.gain.exponentialRampToValueAtTime(0.22,st+0.02);g.gain.exponentialRampToValueAtTime(0.0001,st+Math.max(x.dur,0.12));o.connect(g).connect(ac.destination);o.start(st);o.stop(st+x.dur+0.05);}const end=t0+Math.max(...n.map(x=>x.start+x.dur),0.5);setTimeout(()=>ac.close(),(end-ac.currentTime+0.3)*1000);}
+function updateHUD(el,act){
+  $("hScore").textContent=game.score;
+  $("hStreak").textContent=game.streak;
+  const mult=getMultiplier();
+  $("hMult").textContent=mult+"×";
 
+  // Phrase display — show full phrase with current syllable highlighted
+  if(act&&act.phrase&&game.tl.phrases[act.phrase]){
+    const idxs=game.tl.phrases[act.phrase];
+    let html="";
+    idxs.forEach(idx=>{
+      const e=game.tl.events[idx];
+      const isCur=(idx===act._i);
+      const isPast=(e.end<=el+LEAD);
+      const cls=isCur?"syl-cur":isPast?"syl-past":"syl-fut";
+      html+=`<span class="${cls}">${e.l}</span> `;
+    });
+    $("hPhrase").innerHTML=html;
+    $("hLyric").innerHTML=act.l;
+  }else if(act){
+    $("hPhrase").innerHTML="&nbsp;";
+    $("hLyric").innerHTML=act.l;
+  }else{
+    $("hPhrase").innerHTML="&nbsp;";
+    $("hLyric").innerHTML="&nbsp;";
+  }
+
+  // Pitch label
+  const onPitch=act&&game.um!=null&&Math.abs(game.um-act.m)<=HIT_TOL;
+  if(game.um!=null){
+    $("hNote").textContent=noteName(game.um)+(onPitch?" ✓":"");
+    $("hNote").style.color=onPitch?"#5ad19b":"";
+  }else{
+    $("hNote").textContent=act?"sing "+noteName(act.m):"";
+    $("hNote").style.color="";
+  }
+}
+
+function endGame(){
+  game.state="done";
+  // Finalize last note
+  finalizeNote(game.lastActIdx);
+  const acc=game.sf?Math.round(100*game.hf/game.sf):0;
+  $("rGrade").textContent=acc>=88?"S":acc>=75?"A+":acc>=60?"A":acc>=45?"B":acc>=30?"C":"Keep going";
+  $("rScore").textContent=game.score+" pts";
+  $("rAcc").textContent=acc+"%";
+  $("rStreak").textContent=game.best;
+  $("rHits").textContent=game.hits.size+" / "+game.song.notes.length;
+  show("result");
+}
+
+// ─── PREVIEW / SYNTH ─────────────────────────────────────────────────────────
+function previewNotes(notes){
+  const n=normalize(notes).slice().sort((a,b)=>a.start-b.start);if(!n.length)return;
+  const ac=new(window.AudioContext||window.webkitAudioContext)();
+  const t0=ac.currentTime+0.1;
+  for(const x of n){
+    const o=ac.createOscillator(),g=ac.createGain();
+    o.type="triangle";o.frequency.value=midiToFreq(x.m);
+    const st=t0+x.start;
+    g.gain.setValueAtTime(0.0001,st);g.gain.exponentialRampToValueAtTime(0.22,st+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,st+Math.max(x.dur,0.12));
+    o.connect(g).connect(ac.destination);o.start(st);o.stop(st+x.dur+0.05);
+  }
+  const end=t0+Math.max(...n.map(x=>x.start+x.dur),0.5);
+  setTimeout(()=>ac.close(),(end-ac.currentTime+0.3)*1000);
+}
+
+// ─── EDITOR ──────────────────────────────────────────────────────────────────
 let draftNotes=[],selected=-1,drag=null,editorActive=false;
 let bpm=90,gridDivBeats=0.5,snapOn=true,songKey=0;
 const beatLen=()=>60/bpm;
@@ -332,11 +789,11 @@ function rerender(){if(!editorActive){$("editor").style.display="none";return;}$
 function guessKey(){const c=new Array(12).fill(0);draftNotes.forEach(n=>c[((n.m%12)+12)%12]+=n.dur);let best=0;for(let i=1;i<12;i++)if(c[i]>c[best])best=i;return best;}
 function loadEditor(notes){draftNotes=notes;selected=-1;editorActive=true;songKey=draftNotes.length?guessKey():0;if(!$("songTitle").value)$("songTitle").value="My song";rerender();}
 function startBlank(){draftNotes=[];selected=-1;editorActive=true;bpm=parseInt($("bpm").value,10)||90;songKey=parseInt($("keySel").value,10)||0;if(!$("songTitle").value)$("songTitle").value="My song";rerender();$("editor").scrollIntoView({behavior:"smooth",block:"nearest"});}
-
 function setBpm(v){v=Math.min(240,Math.max(40,v||90));const ratio=bpm/v;draftNotes.forEach(n=>{n.start*=ratio;n.dur=Math.max(0.05,n.dur*ratio);});bpm=v;rerender();}
 function setKey(k){const diff=(((k-songKey)%12)+12)%12;const sh=diff>6?diff-12:diff;if(sh!==0)draftNotes.forEach(n=>n.m=foldMidi(n.m+sh));songKey=k;rerender();}
 function snapAll(){if(!(snapOn&&gridDivBeats>0))return;const g=gridStep();draftNotes.forEach(n=>{n.start=Math.round(n.start/g)*g;n.dur=Math.max(g,Math.round(n.dur/g)*g);});rerender();}
 
+// ─── RECORDING ───────────────────────────────────────────────────────────────
 let rec=null;
 async function toggleRecord(){
   if(rec&&rec.on){rec.on=false;$("recBtn").textContent="● Record";const notes=samplesToNotes(smoothSamples(rec.samples));$("recStatus").textContent=notes.length?`Captured ${notes.length} notes — shape them below.`:"Didn't catch a clear melody — try again, louder and steadier.";loadEditor(notes);return;}
@@ -345,9 +802,10 @@ async function toggleRecord(){
 }
 function recLoop(now){if(!rec||!rec.on)return;analyser.getFloatTimeDomainData(timeBuf);const f=detectPitch(timeBuf,audioCtx.sampleRate);let midi=null;if(f>0)midi=foldMidi(freqToMidi(f));rec.samples.push({t:(now-rec.t0)/1000,midi});$("recBar").style.width=(midi!=null?Math.min(100,(midi-MIN_MIDI)/(MAX_MIDI-MIN_MIDI)*100):0)+"%";requestAnimationFrame(recLoop);}
 
+// ─── FILE ANALYSIS ────────────────────────────────────────────────────────────
 async function analyzeFile(file){
   $("fileStatus").textContent="Decoding…";
-  try{const ab=await file.arrayBuffer();const tmp=new (window.AudioContext||window.webkitAudioContext)();const dec=await tmp.decodeAudioData(ab);await tmp.close();
+  try{const ab=await file.arrayBuffer();const tmp=new(window.AudioContext||window.webkitAudioContext)();const dec=await tmp.decodeAudioData(ab);await tmp.close();
     const dur=Math.min(dec.duration,45),SR=8000;const off=new OfflineAudioContext(1,Math.ceil(dur*SR),SR);const src=off.createBufferSource();src.buffer=dec;src.connect(off.destination);src.start();const rd=await off.startRendering();const ch=rd.getChannelData(0);
     $("fileStatus").textContent="Analysing pitch…";await new Promise(r=>setTimeout(r,30));
     const frame=1024,hop=512,samples=[];for(let i=0;i+frame<ch.length;i+=hop){const f=detectPitch(ch.subarray(i,i+frame),SR);samples.push({t:i/SR,midi:f>0?foldMidi(freqToMidi(f)):null});}
@@ -355,13 +813,17 @@ async function analyzeFile(file){
   }catch(e){$("fileStatus").textContent="Couldn't read that file: "+e.message;}
 }
 
+// ─── IMPORT / EXPORT ─────────────────────────────────────────────────────────
 function importSong(file){const r=new FileReader();r.onload=()=>{try{const o=JSON.parse(r.result);if(!o.notes||!Array.isArray(o.notes))throw 0;o.id=o.id||"imp-"+Date.now();o.sub=o.sub||"Imported";o.level=o.level||"Custom";SONGS.push(o);renderSongs();}catch(e){alert("That doesn't look like a Vocal Hero song file.");}};r.readAsText(file);}
 function currentDraftSong(){const ord=draftNotes.slice().sort((a,b)=>a.start-b.start);return{id:"user-"+Date.now(),title:$("songTitle").value||"My song",sub:"Your creation",level:"Custom",key:NN[songKey],bpm,notes:ord.map(n=>({m:n.m,start:+n.start.toFixed(3),d:+n.dur.toFixed(3),l:n.l||"la"}))};}
 function downloadSong(){const s=currentDraftSong();const b=new Blob([JSON.stringify(s,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=(s.title||"song").replace(/[^a-z0-9]+/gi,"-").toLowerCase()+".json";a.click();}
 
-function show(id){for(const s of ["home","play","result","create"]){const el=$(s);if(s==="play")el.classList.toggle("on",id==="play");else el.classList.toggle("on",id===s);}}
+// ─── SCREEN ROUTING ──────────────────────────────────────────────────────────
+function show(id){for(const s of["home","play","result","create"]){const el=$(s);if(s==="play")el.classList.toggle("on",id==="play");else el.classList.toggle("on",id===s);}}
 function renderSongs(){const w=$("songlist");w.innerHTML="";for(const s of SONGS){const el=document.createElement("button");el.className="song";el.innerHTML=`<div><h3>${s.title}</h3><p>${s.sub}</p></div><span class="lvl">${s.level}</span>`;el.onclick=()=>launch(s);w.appendChild(el);}}
 (function fillKeys(){const sel=$("keySel");NN.forEach((n,i)=>{const o=document.createElement("option");o.value=i;o.textContent=n+" major";sel.appendChild(o);});})();
+
+// ─── EVENT LISTENERS ─────────────────────────────────────────────────────────
 $("rAgain").onclick=()=>startGame(game.song);
 $("rHome").onclick=()=>show("home");
 $("goCreate").onclick=()=>{draftNotes=[];selected=-1;editorActive=false;$("editor").style.display="none";$("recStatus").textContent="";$("fileStatus").textContent="";show("create");};
