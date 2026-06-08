@@ -384,9 +384,11 @@ window.addEventListener("resize",()=>{resize();if($("create").classList.contains
 
 // ─── GAME ENGINE ──────────────────────────────────────────────────────────────
 let game=null;
-const NOW_X=0.22;   // hit line at 22% from left
-const PXS=130;      // pixels per second
-const LEAD=2.8;     // seconds of lead-in before first note
+const PIANO_W=54;   // piano keyboard panel width (px)
+const NOW_FRAC=0.22;// hit line as fraction of TRACK width (after piano panel)
+const PXS=140;      // pixels per second
+const LEAD=3.0;     // seconds of lead-in before first note
+const NOTE_H=22;    // note bar height in pixels
 
 function buildTimeline(song){
   const n=normalize(song.notes).slice().sort((a,b)=>a.start-b.start);
@@ -398,6 +400,10 @@ function buildTimeline(song){
   return{events:ev,total,phrases};
 }
 
+// Track area starts after piano panel
+const trackX=()=>PIANO_W;
+const trackW=()=>W-PIANO_W;
+const nowX=()=>PIANO_W+trackW()*NOW_FRAC;
 function midiToY(m){return H-((m-MIN_MIDI)/(MAX_MIDI-MIN_MIDI))*H;}
 
 function getMultiplier(){
@@ -451,7 +457,7 @@ function finalizeNote(idx){
   game.score+=pts;
   if(pct>=0.55){
     game.streak++;game.best=Math.max(game.best,game.streak);game.hits.add(idx);
-    if(pts>0)game.popups.push({pts,x:W*NOW_X,y:midiToY(e.m),life:0,col:pct>=0.85?"#5ad19b":"#ffd97a"});
+    if(pts>0)game.popups.push({pts,x:nowX(),y:midiToY(e.m),life:0,col:pct>=0.85?"#5ad19b":"#ffd97a"});
   }else{
     game.streak=0;
   }
@@ -506,39 +512,107 @@ function rr(c,x,y,w,h,r){
   c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();
 }
 
-function drawGame(el,act){
-  ctx.clearRect(0,0,W,H);
-  const nx=W*NOW_X;
-  const NOTE_H=20;
+function drawPianoPanel(){
+  const rowH=H/(MAX_MIDI-MIN_MIDI+1);
+  // Panel background
+  ctx.fillStyle="#0a0e22";
+  ctx.fillRect(0,0,PIANO_W,H);
+  // Separator line
+  ctx.strokeStyle="rgba(44,52,112,.9)";
+  ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(PIANO_W,0);ctx.lineTo(PIANO_W,H);ctx.stroke();
 
-  // ── Pitch lane background ──
   for(let m=MIN_MIDI;m<=MAX_MIDI;m++){
     const y=midiToY(m);
-    const rowH=H/(MAX_MIDI-MIN_MIDI);
-    const pc=(((m-0)%12)+12)%12;// songKey=0 for generic
+    const pc=(((m)%12)+12)%12;
     const isBlack=[1,3,6,8,10].includes(pc);
-    ctx.fillStyle=isBlack?"rgba(8,11,32,.5)":"rgba(18,22,55,.4)";
-    ctx.fillRect(0,y-rowH/2,W,rowH);
-  }
+    const isC=(pc===0);
 
-  // ── Horizontal pitch guide lines ──
-  ctx.lineWidth=1;
-  for(let m=MIN_MIDI;m<=MAX_MIDI;m+=2){
+    // Key background
+    ctx.fillStyle=isBlack?"#0d1030":"#1a2050";
+    ctx.fillRect(1,y-rowH/2,PIANO_W-3,rowH);
+
+    // White key accent line on right
+    if(!isBlack){
+      ctx.fillStyle="rgba(255,255,255,.06)";
+      ctx.fillRect(PIANO_W-6,y-rowH/2,5,rowH);
+    }
+
+    // C note label
+    if(isC){
+      ctx.fillStyle="#f0b429";
+      ctx.font="bold 9px 'DM Mono'";
+      ctx.textAlign="right";
+      ctx.fillText(noteName(m),PIANO_W-8,y+3);
+    } else if(!isBlack && rowH>10){
+      ctx.fillStyle="rgba(154,160,200,.4)";
+      ctx.font="8px 'DM Mono'";
+      ctx.textAlign="right";
+      ctx.fillText(noteName(m),PIANO_W-8,y+3);
+    }
+  }
+  ctx.textAlign="left";
+
+  // Highlight the active note's key
+  if(game&&game.lastActIdx>=0){
+    const e=game.tl.events[game.lastActIdx];
+    if(e){
+      const y=midiToY(e.m);
+      ctx.fillStyle="rgba(240,180,41,.35)";
+      ctx.fillRect(1,y-rowH/2,PIANO_W-3,rowH);
+    }
+  }
+  // Highlight singer's current pitch key
+  if(game&&game.um!=null){
+    const y=midiToY(game.um);
+    const act=game.lastActIdx>=0?game.tl.events[game.lastActIdx]:null;
+    const onPitch=act&&Math.abs(game.um-act.m)<=HIT_TOL;
+    ctx.fillStyle=onPitch?"rgba(90,209,155,.5)":"rgba(255,255,255,.2)";
+    ctx.fillRect(1,y-rowH/2,PIANO_W-3,rowH);
+    // Arrow pointing right
+    ctx.fillStyle=onPitch?"#5ad19b":"rgba(255,255,255,.6)";
+    ctx.beginPath();
+    ctx.moveTo(PIANO_W-2,y);
+    ctx.lineTo(PIANO_W-10,y-5);
+    ctx.lineTo(PIANO_W-10,y+5);
+    ctx.closePath();ctx.fill();
+  }
+}
+
+function drawGame(el,act){
+  ctx.clearRect(0,0,W,H);
+  const nx=nowX();
+  const tx=trackX();
+  const tw=trackW();
+
+  // ── Pitch lane background (track area only) ──
+  const rowH=H/(MAX_MIDI-MIN_MIDI+1);
+  for(let m=MIN_MIDI;m<=MAX_MIDI;m++){
     const y=midiToY(m);
-    ctx.strokeStyle="rgba(44,52,112,.4)";
-    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
-    ctx.fillStyle="rgba(154,160,200,.5)";
-    ctx.font="9px 'DM Mono'";ctx.fillText(noteName(m),4,y-3);
+    const pc=(((m)%12)+12)%12;
+    const isBlack=[1,3,6,8,10].includes(pc);
+    ctx.fillStyle=isBlack?"rgba(8,11,32,.6)":"rgba(18,22,55,.45)";
+    ctx.fillRect(tx,y-rowH/2,tw,rowH);
   }
 
-  // ── Upcoming note approach glow (warn lines behind notes) ──
+  // ── Horizontal lane dividers ──
+  ctx.lineWidth=1;
+  for(let m=MIN_MIDI;m<=MAX_MIDI;m++){
+    const y=midiToY(m);
+    const pc=(((m)%12)+12)%12;
+    const isC=(pc===0);
+    ctx.strokeStyle=isC?"rgba(240,180,41,.25)":"rgba(44,52,112,.3)";
+    ctx.lineWidth=isC?1.5:0.5;
+    ctx.beginPath();ctx.moveTo(tx,y);ctx.lineTo(W,y);ctx.stroke();
+  }
+
+  // ── Approach glow for upcoming notes ──
   for(let i=0;i<game.tl.events.length;i++){
     const e=game.tl.events[i];
-    const x1=nx+(e.start-el)*PXS;
-    if(x1>W||nx+(e.end-el)*PXS<0)continue;
-    // Subtle glow approaching the hit line
-    if(x1>nx&&x1<nx+200){
-      const alpha=(1-(x1-nx)/200)*0.15;
+    const x1=tx+(e.start-el)*PXS+tw*NOW_FRAC;
+    if(x1>W||tx+(e.end-el)*PXS+tw*NOW_FRAC<tx)continue;
+    if(x1>nx&&x1<nx+180){
+      const alpha=(1-(x1-nx)/180)*0.18;
       const y=midiToY(e.m);
       const grad=ctx.createLinearGradient(nx,0,x1,0);
       grad.addColorStop(0,`rgba(240,180,41,${alpha})`);
@@ -549,87 +623,106 @@ function drawGame(el,act){
   }
 
   // ── Note bars ──
+  ctx.save();
+  ctx.beginPath();ctx.rect(tx,0,tw,H);ctx.clip(); // clip to track area
+
   for(let i=0;i<game.tl.events.length;i++){
     const e=game.tl.events[i];
     const x1=nx+(e.start-el)*PXS;
     const x2=nx+(e.end-el)*PXS;
-    if(x2<-10||x1>W+10)continue;
+    if(x2<tx-10||x1>W+10)continue;
+
     const y=midiToY(e.m);
+    const barW=Math.max(x2-x1,8);
     const isAct=(i===game.lastActIdx);
     const isHit=game.hits.has(i);
     const isPast=x2<=nx;
     const ns=game.noteState.get(i);
     const holdPct=ns&&ns.total>0?ns.frames/ns.total:0;
 
-    // Shadow for active note
-    if(isAct){ctx.shadowColor="rgba(240,180,41,.5)";ctx.shadowBlur=22;}
-
-    // Base bar — dim for future, coloured for active/past
+    // ── Base bar ──
     if(isPast){
-      ctx.fillStyle=isHit?"rgba(90,209,155,.35)":"rgba(224,90,107,.25)";
+      ctx.fillStyle=isHit?"rgba(90,209,155,.3)":"rgba(224,90,107,.2)";
     }else if(isAct){
-      ctx.fillStyle="rgba(50,60,130,.85)";
+      ctx.fillStyle="rgba(40,50,120,.9)";
+      ctx.shadowColor="rgba(240,180,41,.4)";ctx.shadowBlur=18;
     }else{
-      // Upcoming: shade by how soon
       const dist=x1-nx;
-      const alpha=Math.max(0.25,Math.min(0.7,1-dist/600));
-      ctx.fillStyle=`rgba(100,110,200,${alpha})`;
+      const alpha=Math.max(0.3,Math.min(0.75,1-dist/700));
+      ctx.fillStyle=`rgba(80,95,190,${alpha})`;
     }
-    rr(ctx,x1,y-NOTE_H/2,Math.max(x2-x1,6),NOTE_H,NOTE_H/2);
-    ctx.fill();
-    ctx.shadowBlur=0;
+    rr(ctx,x1,y-NOTE_H/2,barW,NOTE_H,NOTE_H/2);
+    ctx.fill();ctx.shadowBlur=0;
 
-    if(!isPast){
-      // LEFT of NOW_X = already-passed portion → show hold feedback
-      if(x1<nx){
-        const passedW=Math.min(nx,x2)-x1;
-        if(passedW>0){
-          ctx.fillStyle=holdPct>=0.55?"rgba(90,209,155,.85)":"rgba(224,90,107,.7)";
-          rr(ctx,x1,y-NOTE_H/2,passedW,NOTE_H,NOTE_H/2);
-          ctx.fill();
-        }
-      }
-      // RIGHT of NOW_X = upcoming tail — bright gold if active
-      if(isAct&&x2>nx){
-        const tailX=Math.max(x1,nx);
-        ctx.fillStyle="rgba(240,180,41,.9)";
-        if(isAct){ctx.shadowColor="rgba(240,180,41,.7)";ctx.shadowBlur=14;}
-        rr(ctx,tailX,y-NOTE_H/2+3,x2-tailX,NOTE_H-6,NOTE_H/2);
-        ctx.fill();ctx.shadowBlur=0;
+    // ── Hold fill (left portion = sung section) ──
+    if(!isPast&&x1<nx){
+      const passedW=Math.min(nx,x2)-Math.max(x1,tx);
+      if(passedW>0){
+        ctx.fillStyle=holdPct>=0.55?"rgba(90,209,155,.9)":"rgba(224,90,107,.75)";
+        rr(ctx,Math.max(x1,tx),y-NOTE_H/2,passedW,NOTE_H,NOTE_H/2);
+        ctx.fill();
       }
     }
 
-    // Lyric text below bar
-    const lyrX=Math.max(x1+4,4);
-    if(lyrX<W-4){
-      ctx.fillStyle=isAct?"rgba(255,217,122,.95)":"rgba(244,241,230,.55)";
-      ctx.font=`${isAct?"bold ":""}11px 'DM Mono'`;
-      ctx.fillText(e.l,lyrX,y+NOTE_H/2+13);
+    // ── Active tail glow (right of hit line) ──
+    if(isAct&&x2>nx){
+      const tailX=Math.max(x1,nx);
+      const tailW=x2-tailX;
+      ctx.fillStyle="rgba(240,180,41,.92)";
+      ctx.shadowColor="rgba(240,180,41,.8)";ctx.shadowBlur=16;
+      rr(ctx,tailX,y-NOTE_H/2+3,tailW,NOTE_H-6,NOTE_H/2);
+      ctx.fill();ctx.shadowBlur=0;
+      // Shimmer pulse on tail
+      const pulse=0.5+0.5*Math.sin(Date.now()/120);
+      ctx.fillStyle=`rgba(255,255,200,${pulse*0.25})`;
+      rr(ctx,tailX,y-NOTE_H/2+3,tailW,NOTE_H-6,NOTE_H/2);
+      ctx.fill();
     }
 
-    // Note border highlight
-    ctx.strokeStyle=isAct?"rgba(240,180,41,.6)":isPast?(isHit?"rgba(90,209,155,.3)":"rgba(224,90,107,.2)"):"rgba(80,90,180,.5)";
+    // ── Border ──
+    ctx.strokeStyle=isAct?"rgba(240,180,41,.8)":isPast?(isHit?"rgba(90,209,155,.4)":"rgba(224,90,107,.25)"):"rgba(90,100,200,.55)";
     ctx.lineWidth=isAct?2:1;
-    rr(ctx,x1,y-NOTE_H/2,Math.max(x2-x1,6),NOTE_H,NOTE_H/2);
+    rr(ctx,x1,y-NOTE_H/2,barW,NOTE_H,NOTE_H/2);
     ctx.stroke();
-  }
 
-  // ── Hit line (NOW_X) ──
-  const lineGrad=ctx.createLinearGradient(nx-3,0,nx+3,0);
+    // ── Lyric ON the note bar ──
+    const lyric=e.l;
+    const labelX=Math.max(x1,tx)+6;
+    const labelMaxW=Math.min(x2,W)-labelX-4;
+    if(labelMaxW>8){
+      ctx.save();
+      ctx.beginPath();ctx.rect(labelX,y-NOTE_H/2,labelMaxW,NOTE_H);ctx.clip();
+      ctx.fillStyle=isAct?"#241a00":(isPast?(isHit?"#0d2e1e":"#3a0a10"):"rgba(255,255,255,.9)");
+      ctx.font=`${isAct?"bold ":""}${Math.min(13,NOTE_H*0.6)}px 'DM Mono'`;
+      ctx.textBaseline="middle";
+      ctx.fillText(lyric,labelX,y);
+      ctx.restore();
+    }
+  }
+  ctx.restore(); // end track clip
+
+  // ── Hit line ──
+  const lineGrad=ctx.createLinearGradient(nx-2,0,nx+2,0);
   lineGrad.addColorStop(0,"rgba(240,180,41,0)");
-  lineGrad.addColorStop(0.5,"rgba(240,180,41,.85)");
+  lineGrad.addColorStop(0.5,"rgba(240,180,41,.9)");
   lineGrad.addColorStop(1,"rgba(240,180,41,0)");
   ctx.strokeStyle=lineGrad;
   ctx.lineWidth=3;ctx.setLineDash([]);
   ctx.beginPath();ctx.moveTo(nx,0);ctx.lineTo(nx,H);ctx.stroke();
+  // Hit line tick marks at note row positions
+  if(act){
+    const y=midiToY(act.m);
+    ctx.fillStyle="rgba(240,180,41,.9)";
+    ctx.beginPath();ctx.arc(nx,y,5,0,Math.PI*2);ctx.fill();
+  }
 
   // ── Singer pitch trail ──
   ctx.lineWidth=2.5;
-  ctx.strokeStyle="rgba(255,255,255,.2)";
+  ctx.strokeStyle="rgba(255,255,255,.18)";
   ctx.beginPath();let trailStarted=false;
   for(let i=0;i<game.trail.length;i++){
     const m=game.trail[i];if(m==null){trailStarted=false;continue;}
-    const x=nx-(game.trail.length-1-i)*3,y=midiToY(m);
+    const x=nx-(game.trail.length-1-i)*3.5,y=midiToY(m);
     if(!trailStarted){ctx.moveTo(x,y);trailStarted=true;}else ctx.lineTo(x,y);
   }
   ctx.stroke();
@@ -640,15 +733,16 @@ function drawGame(el,act){
     const onPitch=act&&Math.abs(game.um-act.m)<=HIT_TOL;
     const partialPitch=!onPitch&&act&&Math.abs(game.um-act.m)<=PARTIAL_TOL;
     const col=onPitch?"#5ad19b":partialPitch?"#ffd97a":"#f4f1e6";
-    // Outer glow ring
-    ctx.beginPath();ctx.arc(nx,y,18,0,Math.PI*2);
-    ctx.fillStyle=onPitch?"rgba(90,209,155,.15)":partialPitch?"rgba(255,217,122,.1)":"rgba(255,255,255,.05)";ctx.fill();
-    // Main dot
-    ctx.beginPath();ctx.arc(nx,y,9,0,Math.PI*2);
-    ctx.fillStyle=col;
-    ctx.shadowColor=col;ctx.shadowBlur=onPitch?24:10;
+    ctx.beginPath();ctx.arc(nx,y,20,0,Math.PI*2);
+    ctx.fillStyle=onPitch?"rgba(90,209,155,.12)":partialPitch?"rgba(255,217,122,.08)":"rgba(255,255,255,.04)";
+    ctx.fill();
+    ctx.beginPath();ctx.arc(nx,y,10,0,Math.PI*2);
+    ctx.fillStyle=col;ctx.shadowColor=col;ctx.shadowBlur=onPitch?28:12;
     ctx.fill();ctx.shadowBlur=0;
   }
+
+  // ── Piano panel (drawn last so it's on top) ──
+  drawPianoPanel();
 
   // ── Score popups ──
   game.popups=game.popups.filter(p=>p.life<55);
@@ -658,7 +752,7 @@ function drawGame(el,act){
     ctx.globalAlpha=1-p.life/55;
     ctx.fillStyle=p.col;
     ctx.font="bold 16px 'DM Mono'";
-    ctx.fillText("+"+p.pts, p.x+18, p.y-p.life*1.8);
+    ctx.fillText("+"+p.pts, p.x+20, p.y-p.life*1.8);
   });
   ctx.restore();
 }
