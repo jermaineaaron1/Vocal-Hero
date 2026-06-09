@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-17';
+  var BUILD='build-20250608-18';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1051,9 +1051,17 @@ function previewNotes(notes){
     const o=ac.createOscillator(),g=ac.createGain();
     o.type="triangle";o.frequency.value=midiToFreq(x.m);
     const st=t0+x.start;
-    g.gain.setValueAtTime(0.0001,st);g.gain.exponentialRampToValueAtTime(0.22,st+0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001,st+Math.max(x.dur,0.12));
-    o.connect(g).connect(ac.destination);o.start(st);o.stop(st+x.dur+0.05);
+    const attack=0.02;
+    const release=Math.min(0.1,x.dur*0.15); // short release at end
+    const sustainEnd=st+x.dur-release;
+    // attack → sustain (full volume for note duration) → release
+    g.gain.setValueAtTime(0.0001,st);
+    g.gain.exponentialRampToValueAtTime(0.25,st+attack);   // attack
+    g.gain.setValueAtTime(0.25,Math.max(st+attack,sustainEnd)); // hold sustain
+    g.gain.exponentialRampToValueAtTime(0.0001,sustainEnd+release); // release
+    o.connect(g).connect(ac.destination);
+    o.start(st);
+    o.stop(sustainEnd+release+0.05);
   }
   const end=t0+Math.max(...n.map(x=>x.start+x.dur),0.5);
   setTimeout(()=>ac.close(),(end-ac.currentTime+0.3)*1000);
