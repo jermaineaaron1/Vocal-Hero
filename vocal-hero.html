@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-19';
+  var BUILD='build-20250608-20';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1043,29 +1043,53 @@ function endGame(){
 }
 
 // ─── PREVIEW / SYNTH ─────────────────────────────────────────────────────────
+// Shared playback state — only one sound source plays at a time
+let _previewAc=null;      // current preview AudioContext
+let _previewTimer=null;   // its close-timeout
+
+function stopAllPreview(){
+  // Stop preview
+  if(_previewTimer){clearTimeout(_previewTimer);_previewTimer=null;}
+  if(_previewAc){try{_previewAc.close();}catch(e){}  _previewAc=null;}
+  // Stop single-note audition
+  if(edAudNode){
+    try{
+      edAudNode.gain.cancelScheduledValues(edAudCtx.currentTime);
+      edAudNode.gain.setValueAtTime(0,edAudCtx.currentTime);
+      edAudNode.osc.stop(edAudCtx.currentTime+0.01);
+    }catch(e){}
+    edAudNode=null;
+  }
+  edLastPlayedMidi=-1;
+}
+
 function previewNotes(notes){
+  // Stop anything currently playing, then start fresh
+  stopAllPreview();
   const n=normalize(notes).slice().sort((a,b)=>a.start-b.start);if(!n.length)return;
   const ac=new(window.AudioContext||window.webkitAudioContext)();
-  const t0=ac.currentTime+0.1;
+  _previewAc=ac;
+  const t0=ac.currentTime+0.05;
   for(const x of n){
     const dur=Math.max(x.dur||0.1, 0.05);
     const st=t0+x.start;
     const o=ac.createOscillator(),g=ac.createGain();
     o.type="triangle";
     o.frequency.value=midiToFreq(x.m);
-    // Use linearRamp throughout — ramp from V to V = hold (reliable across browsers)
-    // attack (20ms) → sustain at full volume → release (40ms)
     const releaseLen=Math.min(0.04, dur*0.12);
     g.gain.setValueAtTime(0, st);
-    g.gain.linearRampToValueAtTime(0.28, st+0.02);              // attack
-    g.gain.linearRampToValueAtTime(0.28, st+dur-releaseLen);    // sustain hold
-    g.gain.linearRampToValueAtTime(0,    st+dur);               // release
+    g.gain.linearRampToValueAtTime(0.28, st+0.02);
+    g.gain.linearRampToValueAtTime(0.28, st+dur-releaseLen);
+    g.gain.linearRampToValueAtTime(0,    st+dur);
     o.connect(g).connect(ac.destination);
     o.start(st);
     o.stop(st+dur+0.05);
   }
   const end=t0+Math.max(...n.map(x=>x.start+(x.dur||0.1)),0.5);
-  setTimeout(()=>{try{ac.close();}catch(e){}}, (end-ac.currentTime+0.5)*1000);
+  _previewTimer=setTimeout(()=>{
+    try{ac.close();}catch(e){}
+    if(_previewAc===ac)_previewAc=null;
+  },(end-ac.currentTime+0.4)*1000);
 }
 
 // ─── EDITOR ──────────────────────────────────────────────────────────────────
@@ -1500,14 +1524,16 @@ function edDeleteSelected(){
 // ── Note audition (play a note so user can hear the pitch) ────────────────────
 let edAudCtx=null, edAudNode=null, edLastPlayedMidi=-1;
 function edPlayNote(midi, dur=0.5){
-  edLastPlayedMidi=midi; // track for drag debounce only
-  // Stop any currently playing note immediately
+  edLastPlayedMidi=midi;
+  // Stop any running preview first (no overlap with single-note)
+  if(_previewTimer){clearTimeout(_previewTimer);_previewTimer=null;}
+  if(_previewAc){try{_previewAc.close();}catch(e){} _previewAc=null;}
+  // Stop previous single-note sound immediately
   if(edAudNode){
     try{
       edAudNode.gain.cancelScheduledValues(edAudCtx.currentTime);
-      edAudNode.gain.setValueAtTime(0.0001,edAudCtx.currentTime);
-      edAudNode.gain.exponentialRampToValueAtTime(0.0001,edAudCtx.currentTime+0.02);
-      edAudNode.osc.stop(edAudCtx.currentTime+0.03);
+      edAudNode.gain.setValueAtTime(0,edAudCtx.currentTime);
+      edAudNode.osc.stop(edAudCtx.currentTime+0.01);
     }catch(e){}
     edAudNode=null;
   }
