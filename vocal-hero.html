@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-15';
+  var BUILD='build-20250608-16';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1491,8 +1491,7 @@ function edDeleteSelected(){
 // ── Note audition (play a note so user can hear the pitch) ────────────────────
 let edAudCtx=null, edAudNode=null, edLastPlayedMidi=-1;
 function edPlayNote(midi){
-  if(midi===edLastPlayedMidi)return; // don't re-trigger same pitch
-  edLastPlayedMidi=midi;
+  edLastPlayedMidi=midi; // track for drag debounce only
   // Stop any currently playing note
   if(edAudNode){try{edAudNode.gain.cancelScheduledValues(0);edAudNode.gain.setValueAtTime(0,edAudCtx.currentTime);edAudNode.osc.stop();}catch(e){}}
   if(!edAudCtx||edAudCtx.state==="closed"){
