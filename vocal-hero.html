@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-7';
+  var BUILD='build-20250608-8';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -583,25 +583,31 @@ async function startGameWithSettings(){
 }
 
 function startGame(song){
-  resize();show("play");
-  game={
-    song,
-    tl:buildTimeline(song),
-    score:0,streak:0,best:0,hf:0,sf:0,
-    hits:new Set(),
-    noteState:new Map(),  // idx → {frames, total}
-    lastActIdx:-1,
-    popups:[],            // floating score text
-    um:null,trail:[],
-    t0:0,state:"cd"
-  };
-  $("hScore").textContent="0";$("hStreak").textContent="0";$("hMult").textContent="1×";
-  let n=3;$("cd").textContent=n;
-  const iv=setInterval(()=>{
-    n--;
-    if(n<=0){clearInterval(iv);$("cd").textContent="";game.state="play";game.t0=performance.now();requestAnimationFrame(gameLoop);}
-    else $("cd").textContent=n;
-  },800);
+  // show("play") FIRST so canvas is visible before resize() measures it
+  show("play");
+  // Use requestAnimationFrame to let the browser paint the play screen
+  // before we measure canvas dimensions — fixes W=0/H=0 on replay
+  requestAnimationFrame(()=>{
+    resize();
+    game={
+      song,
+      tl:buildTimeline(song),
+      score:0,streak:0,best:0,hf:0,sf:0,
+      hits:new Set(),
+      noteState:new Map(),
+      lastActIdx:-1,
+      popups:[],
+      um:null,trail:[],
+      t0:0,state:"cd"
+    };
+    $("hScore").textContent="0";$("hStreak").textContent="0";$("hMult").textContent="1×";
+    let n=3;$("cd").textContent=n;
+    const iv=setInterval(()=>{
+      n--;
+      if(n<=0){clearInterval(iv);$("cd").textContent="";game.state="play";game.t0=performance.now();requestAnimationFrame(gameLoop);}
+      else $("cd").textContent=n;
+    },800);
+  });
 }
 
 function finalizeNote(idx){
@@ -625,7 +631,10 @@ function finalizeNote(idx){
 
 function gameLoop(now){
   if(!game||game.state!=="play")return;
-  game.pausedAt=now-game.t0; // track elapsed so pause/resume works
+  // Safety: if canvas has no size (was hidden during startGame), re-measure now
+  if(W===0||H===0)resize();
+  if(W===0||H===0){requestAnimationFrame(gameLoop);return;}
+  game.pausedAt=now-game.t0;
   const el=(now-game.t0)/1000;
 
   // Pitch detection
