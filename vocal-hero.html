@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-12';
+  var BUILD='build-20250608-13';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1262,7 +1262,10 @@ const ED_MIN=36, ED_MAX=84; // full piano range C2-C6
 let edCv,edCtx,edW=0,edH=0;
 
 function initSongEditor(){
+  // Lazy init — called on first openSongEditor() so DOM is ready
+  if(edCv)return;
   edCv=document.getElementById("edCv");
+  if(!edCv)return;
   edCtx=edCv.getContext("2d");
   bindEditorEvents();
   window.addEventListener("resize",resizeEdCv);
@@ -1276,6 +1279,7 @@ function resizeEdCv(){
 }
 
 function openSongEditor(idx){
+  initSongEditor(); // lazy init now that DOM exists
   edSongIdx=idx;
   const s=SONGS[idx];
   const norm=normalize(s.notes).slice().sort((a,b)=>a.start-b.start);
@@ -1681,7 +1685,7 @@ document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{document.querySelect
 loadPersistedSongs();
 setupPregameAudio();
 renderSongs();
-initSongEditor();
+// initSongEditor() is called lazily inside openSongEditor() once DOM is ready
 </script>
 
 <!-- ── Full-screen Song Editor ─────────────────────────────────────── -->
