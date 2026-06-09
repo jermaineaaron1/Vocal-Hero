@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-21';
+  var BUILD='build-20250608-22';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1456,6 +1456,28 @@ function drawEditorFrame(){
     edCtx.textBaseline="bottom";
     if(cx1+4<edW)edCtx.fillText(noteName(n.m),cx1+4,y-ED_NOTE_H/2-1);
     edCtx.textBaseline="alphabetic";
+
+    // ── × delete button on top-right corner of selected note ──
+    if(isSel&&x2>ED_PIANO_W&&x2<=edW+20){
+      const btnR=9; // radius
+      const btnX=Math.min(x2,edW-2)-btnR;
+      const btnY=y-ED_NOTE_H/2-btnR;
+      // Store position so pointer-down can detect a click on it
+      n._delBtnX=btnX; n._delBtnY=btnY; n._delBtnR=btnR;
+      // Circle background
+      edCtx.beginPath();edCtx.arc(btnX,btnY,btnR,0,Math.PI*2);
+      edCtx.fillStyle="#e05a6b";
+      edCtx.shadowColor="rgba(224,90,107,.7)";edCtx.shadowBlur=8;
+      edCtx.fill();edCtx.shadowBlur=0;
+      // × symbol
+      edCtx.strokeStyle="#fff";edCtx.lineWidth=1.8;
+      edCtx.beginPath();
+      edCtx.moveTo(btnX-4,btnY-4);edCtx.lineTo(btnX+4,btnY+4);
+      edCtx.moveTo(btnX+4,btnY-4);edCtx.lineTo(btnX-4,btnY+4);
+      edCtx.stroke();
+    } else {
+      if(n._delBtnX!==undefined) delete n._delBtnX;
+    }
   });
 
   // ── Piano panel ──
@@ -1691,7 +1713,18 @@ function edPointerDown(e){
   e.preventDefault(); edCv.setPointerCapture(e.pointerId);
   const r=edCv.getBoundingClientRect();
   const px=e.clientX-r.left, py=e.clientY-r.top;
-  if(px<ED_PIANO_W)return; // ignore piano area
+  if(px<ED_PIANO_W)return;
+  // Check if click hit the × delete button of the selected note
+  if(edSel>=0&&edNotes[edSel]){
+    const n=edNotes[edSel];
+    if(n._delBtnX!==undefined){
+      const dx=px-n._delBtnX, dy=py-n._delBtnY;
+      if(Math.sqrt(dx*dx+dy*dy)<=n._delBtnR+3){
+        edDeleteSelected();
+        return;
+      }
+    }
+  }
   const hit=edNoteAt(px,py);
   if(hit){
     edSelectNote(hit.idx);
