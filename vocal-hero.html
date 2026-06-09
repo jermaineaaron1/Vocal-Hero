@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-8';
+  var BUILD='build-20250608-9';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -122,6 +122,18 @@
   .empty{padding:24px;text-align:center;color:var(--muted);font-size:12px}
   /* Score popup */
   .score-popup{position:absolute;pointer-events:none;font-family:"Fraunces",serif;font-size:18px;font-weight:700;color:var(--hit);text-shadow:0 0 12px rgba(90,209,155,.8)}
+  /* Song card edit/audio buttons */
+  .song{position:relative}
+  .song-btns{display:flex;gap:6px;flex-shrink:0}
+  .song-icon-btn{background:transparent;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:12px;padding:5px 9px;cursor:pointer;transition:.15s;white-space:nowrap}
+  .song-icon-btn:hover{border-color:var(--gold);color:var(--gold)}
+  /* Audio upload on pregame */
+  .audio-upload-area{border:1px dashed var(--line);border-radius:12px;padding:14px;text-align:center;cursor:pointer;transition:.15s;margin-top:8px}
+  .audio-upload-area:hover{border-color:var(--gold-soft)}
+  .audio-upload-area.has-audio{border-color:var(--hit);background:rgba(90,209,155,.06)}
+  .audio-status{font-size:12px;color:var(--hit);margin-top:6px;min-height:16px}
+  /* Editor save-edit button */
+  .btn.save-edit{background:var(--hit);color:#001a0d}
   /* Pre-game settings screen */
   #pregame .wrap{width:min(500px,94vw);text-align:center}
   #pregame .song-header{font-family:"Fraunces",serif;font-size:clamp(22px,5vw,34px);font-weight:800;line-height:1.1}
@@ -175,6 +187,16 @@
       <span class="setting-label">🎤 Voice type — sets the pitch display range</span>
       <div class="pill-group" id="voicePills"></div>
       <div class="voice-info" id="voiceInfo"></div>
+    </div>
+
+    <!-- Backing Track -->
+    <div class="setting-block">
+      <span class="setting-label">🎵 Backing track (optional) — plays while you sing</span>
+      <label class="audio-upload-area" id="audioDropArea">
+        <span id="audioDropLabel">Click to upload MP3 / WAV / OGG</span>
+        <input type="file" id="pgAudioFile" accept="audio/*" hidden>
+      </label>
+      <div class="audio-status" id="audioStatus"></div>
     </div>
 
     <div class="row" style="margin-top:24px">
@@ -285,8 +307,9 @@
       <div class="notes" id="noteList"></div>
       <div class="row" style="margin-top:16px">
         <button class="btn ghost sm" id="previewBtn">▶ Preview</button>
-        <button class="btn sm" id="playNowBtn">Play it now</button>
-        <button class="btn ghost sm" id="downloadBtn">Download song file</button>
+        <button class="btn sm" id="playNowBtn">▶ Play it now</button>
+        <button class="btn save-edit sm" id="saveEditBtn" style="display:none">💾 Save changes</button>
+        <button class="btn ghost sm" id="downloadBtn">⬇ Download</button>
       </div>
     </div>
     <div class="row"><button class="btn ghost sm" id="createBack">← Back</button></div>
@@ -534,6 +557,20 @@ function openPregame(song){
   $("pgSub").textContent=song.sub+" · "+song.level;
   updateKeyDisplay();
   buildVoicePills();
+  // Reset audio upload UI
+  pregameAudioUrl=song._audioUrl||null;
+  const dropArea=$("audioDropArea");
+  const label=$("audioDropLabel");
+  const status=$("audioStatus");
+  if(pregameAudioUrl){
+    dropArea.classList.add("has-audio");
+    label.textContent="🎵 Backing track loaded";
+    status.textContent="Ready · click to change";
+  }else{
+    dropArea.classList.remove("has-audio");
+    label.textContent="Click to upload MP3 / WAV / OGG";
+    status.textContent="";
+  }
   show("pregame");
 }
 
@@ -602,6 +639,8 @@ function startGame(song){
     };
     $("hScore").textContent="0";$("hStreak").textContent="0";$("hMult").textContent="1×";
     let n=3;$("cd").textContent=n;
+    const countdownMs=3*800;
+    startBackingTrack(song, countdownMs/1000); // start audio in sync with countdown end
     const iv=setInterval(()=>{
       n--;
       if(n<=0){clearInterval(iv);$("cd").textContent="";game.state="play";game.t0=performance.now();requestAnimationFrame(gameLoop);}
@@ -962,7 +1001,7 @@ function updateHUD(el,act){
 
 function endGame(){
   game.state="done";
-  // Finalize last note
+  stopBackingTrack();
   finalizeNote(game.lastActIdx);
   const acc=game.sf?Math.round(100*game.hf/game.sf):0;
   $("rGrade").textContent=acc>=88?"S":acc>=75?"A+":acc>=60?"A":acc>=45?"B":acc>=30?"C":"Keep going";
@@ -1077,6 +1116,107 @@ function importSong(file){const r=new FileReader();r.onload=()=>{try{const o=JSO
 function currentDraftSong(){const ord=draftNotes.slice().sort((a,b)=>a.start-b.start);return{id:"user-"+Date.now(),title:$("songTitle").value||"My song",sub:"Your creation",level:"Custom",key:NN[songKey],bpm,notes:ord.map(n=>({m:n.m,start:+n.start.toFixed(3),d:+n.dur.toFixed(3),l:n.l||"la"}))};}
 function downloadSong(){const s=currentDraftSong();const b=new Blob([JSON.stringify(s,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=(s.title||"song").replace(/[^a-z0-9]+/gi,"-").toLowerCase()+".json";a.click();}
 
+// ─── SONG EDITOR (edit existing songs) ───────────────────────────────────────
+let editingSongIdx=-1; // -1 = creating new, >=0 = editing existing
+
+function openSongEditor(idx){
+  const s=SONGS[idx];
+  editingSongIdx=idx;
+  // Convert song notes to editor format (absolute start times)
+  const norm=normalize(s.notes).slice().sort((a,b)=>a.start-b.start);
+  draftNotes=norm.map(n=>({m:n.m,start:+n.start.toFixed(3),dur:+(n.dur||n.d||0.5).toFixed(3),l:n.l||"la"}));
+  selected=-1;editorActive=true;
+  bpm=s.bpm||90;
+  songKey=NN.indexOf(s.key)||0;
+  $("songTitle").value=s.title||"";
+  $("bpm").value=bpm;
+  $("keySel").value=songKey;
+  // Show save button, hide play-now (already in list)
+  $("saveEditBtn").style.display="inline-flex";
+  $("playNowBtn").textContent="▶ Play it now";
+  rerender();
+  show("create");
+}
+
+function saveEditedSong(){
+  if(editingSongIdx<0)return;
+  const draft=currentDraftSong();
+  // Preserve the original id and phrase data
+  const orig=SONGS[editingSongIdx];
+  SONGS[editingSongIdx]={
+    ...orig,
+    title:draft.title,
+    bpm:draft.bpm,
+    key:draft.key,
+    notes:draft.notes
+  };
+  // Persist to localStorage
+  persistSongs();
+  renderSongs();
+  alert("✅ Changes saved to ""+draft.title+""");
+  show("home");
+}
+
+function persistSongs(){
+  try{
+    // Only persist songs that have been edited or are user-created
+    const toSave=SONGS.map((s,i)=>({idx:i,...s}));
+    localStorage.setItem("vh_songs_v1",JSON.stringify(toSave));
+  }catch(e){console.warn("Could not save songs:",e);}
+}
+
+function loadPersistedSongs(){
+  try{
+    const saved=localStorage.getItem("vh_songs_v1");
+    if(!saved)return;
+    const arr=JSON.parse(saved);
+    arr.forEach(s=>{
+      const {idx,...song}=s;
+      if(idx<SONGS.length) SONGS[idx]={...SONGS[idx],...song};
+      else SONGS.push(song);
+    });
+  }catch(e){}
+}
+
+// ─── AUDIO BACKING TRACK ─────────────────────────────────────────────────────
+let gameAudio=null;   // HTMLAudioElement for current backing track
+let pregameAudioUrl=null; // blob URL for the selected backing track
+
+function setupPregameAudio(){
+  const fileInput=$("pgAudioFile");
+  const dropArea=$("audioDropArea");
+  const status=$("audioStatus");
+  const label=$("audioDropLabel");
+
+  fileInput.onchange=e=>{
+    const f=e.target.files[0];
+    if(!f)return;
+    if(pregameAudioUrl)URL.revokeObjectURL(pregameAudioUrl);
+    pregameAudioUrl=URL.createObjectURL(f);
+    dropArea.classList.add("has-audio");
+    label.textContent="🎵 "+f.name;
+    status.textContent="Ready · click to change";
+    // Store url on the pending song for this session
+    if(pendingSong)pendingSong._audioUrl=pregameAudioUrl;
+  };
+}
+
+function startBackingTrack(song,delaySeconds){
+  stopBackingTrack();
+  const url=song._audioUrl;
+  if(!url)return;
+  gameAudio=new Audio(url);
+  gameAudio.volume=0.75;
+  // Start audio at the right moment (after countdown)
+  setTimeout(()=>{
+    if(gameAudio)gameAudio.play().catch(()=>{});
+  },delaySeconds*1000);
+}
+
+function stopBackingTrack(){
+  if(gameAudio){gameAudio.pause();gameAudio.currentTime=0;gameAudio=null;}
+}
+
 // ─── PAUSE / EXIT ────────────────────────────────────────────────────────────
 let paused=false;
 function togglePause(){
@@ -1089,11 +1229,13 @@ function togglePause(){
     overlay.classList.add("on");
     btn.textContent="▶ Resume";
     if(audioCtx&&audioCtx.state==="running")audioCtx.suspend();
+    if(gameAudio)gameAudio.pause();
   }else{
     game.state="play";
     overlay.classList.remove("on");
     btn.textContent="⏸ Pause";
     if(audioCtx&&audioCtx.state==="suspended")audioCtx.resume();
+    if(gameAudio)gameAudio.play().catch(()=>{});
     // Re-anchor t0 so elapsed time is correct after pause
     game.t0=performance.now()-game.pausedAt;
     requestAnimationFrame(gameLoop);
@@ -1105,6 +1247,7 @@ function exitToHome(){
   $("pauseBtn").textContent="⏸ Pause";
   if(game)game.state="done";
   game=null;
+  stopBackingTrack();
   if(audioCtx&&audioCtx.state==="running")audioCtx.suspend();
   show("home");
 }
@@ -1116,7 +1259,25 @@ document.addEventListener("keydown",e=>{
 
 // ─── SCREEN ROUTING ──────────────────────────────────────────────────────────
 function show(id){for(const s of["home","pregame","play","result","create"]){const el=$(s);if(s==="play")el.classList.toggle("on",id==="play");else el.classList.toggle("on",id===s);}}
-function renderSongs(){const w=$("songlist");w.innerHTML="";for(const s of SONGS){const el=document.createElement("button");el.className="song";el.innerHTML=`<div><h3>${s.title}</h3><p>${s.sub}</p></div><span class="lvl">${s.level}</span>`;el.onclick=()=>launch(s);w.appendChild(el);}}
+function renderSongs(){
+  const w=$("songlist");w.innerHTML="";
+  SONGS.forEach((s,idx)=>{
+    const el=document.createElement("div");
+    el.className="song";
+    el.style.cursor="default";
+    el.innerHTML=`
+      <div style="flex:1;cursor:pointer" class="song-main">
+        <h3>${s.title}</h3><p>${s.sub}</p>
+      </div>
+      <div class="song-btns">
+        <button class="song-icon-btn edit-btn" title="Edit notes & lyrics">✏️ Edit</button>
+        <span class="lvl">${s.level}</span>
+      </div>`;
+    el.querySelector(".song-main").onclick=()=>launch(s);
+    el.querySelector(".edit-btn").onclick=e=>{e.stopPropagation();openSongEditor(idx);};
+    w.appendChild(el);
+  });
+}
 (function fillKeys(){const sel=$("keySel");NN.forEach((n,i)=>{const o=document.createElement("option");o.value=i;o.textContent=n+" major";sel.appendChild(o);});})();
 
 // ─── EVENT LISTENERS ─────────────────────────────────────────────────────────
@@ -1127,12 +1288,30 @@ $("pgStart").onclick=startGameWithSettings;
 
 $("rAgain").onclick=()=>{pendingSong=game.song;openPregame(game.song);};
 $("rHome").onclick=()=>show("home");
-$("goCreate").onclick=()=>{draftNotes=[];selected=-1;editorActive=false;$("editor").style.display="none";$("recStatus").textContent="";$("fileStatus").textContent="";show("create");};
+$("saveEditBtn").onclick=saveEditedSong;
+$("goCreate").onclick=()=>{
+  editingSongIdx=-1;
+  draftNotes=[];selected=-1;editorActive=false;
+  $("editor").style.display="none";
+  $("recStatus").textContent="";$("fileStatus").textContent="";
+  $("saveEditBtn").style.display="none";
+  $("playNowBtn").textContent="▶ Play it now";
+  show("create");
+};
 $("createBack").onclick=()=>show("home");
 $("recBtn").onclick=toggleRecord;
 $("blankStart").onclick=startBlank;
 $("previewBtn").onclick=()=>previewNotes(draftNotes);
-$("playNowBtn").onclick=()=>{const s=currentDraftSong();SONGS.push(s);renderSongs();launch(s);};
+$("playNowBtn").onclick=()=>{
+  if(editingSongIdx>=0){
+    // Save changes then launch
+    const draft=currentDraftSong();
+    SONGS[editingSongIdx]={...SONGS[editingSongIdx],title:draft.title,bpm:draft.bpm,key:draft.key,notes:draft.notes};
+    persistSongs();renderSongs();launch(SONGS[editingSongIdx]);
+  }else{
+    const s=currentDraftSong();SONGS.push(s);persistSongs();renderSongs();launch(s);
+  }
+};
 $("downloadBtn").onclick=downloadSong;
 $("audioFile").onchange=e=>{if(e.target.files[0])analyzeFile(e.target.files[0]);};
 $("importFile").onchange=e=>{if(e.target.files[0])importSong(e.target.files[0]);};
@@ -1141,6 +1320,8 @@ $("keySel").onchange=e=>setKey(parseInt(e.target.value,10));
 $("gridSel").onchange=e=>{gridDivBeats=parseFloat(e.target.value);snapOn=gridDivBeats>0;drawRoll();};
 $("snapAll").onclick=snapAll;
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));t.classList.add("on");$("pSing").classList.toggle("on",t.dataset.tab==="sing");$("pFile").classList.toggle("on",t.dataset.tab==="file");$("pBlank").classList.toggle("on",t.dataset.tab==="blank");});
+loadPersistedSongs();
+setupPregameAudio();
 renderSongs();
 </script>
 </body>
