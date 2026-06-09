@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-16';
+  var BUILD='build-20250608-17';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1467,7 +1467,7 @@ function edSelectNote(i){
     nm.textContent=noteName(n.m)+" · "+n.dur.toFixed(2)+"s";
     inp.disabled=false; inp.value=n.l||""; inp.focus();
     del.disabled=false;
-    edPlayNote(n.m); // play the note so user can hear its pitch
+    edPlayNote(n.m, n.dur); // play at full note duration
   }else{
     nm.textContent="—"; inp.disabled=true; inp.value=""; del.disabled=true;
     edLastPlayedMidi=-1;
@@ -1490,10 +1490,18 @@ function edDeleteSelected(){
 
 // ── Note audition (play a note so user can hear the pitch) ────────────────────
 let edAudCtx=null, edAudNode=null, edLastPlayedMidi=-1;
-function edPlayNote(midi){
+function edPlayNote(midi, dur=0.5){
   edLastPlayedMidi=midi; // track for drag debounce only
-  // Stop any currently playing note
-  if(edAudNode){try{edAudNode.gain.cancelScheduledValues(0);edAudNode.gain.setValueAtTime(0,edAudCtx.currentTime);edAudNode.osc.stop();}catch(e){}}
+  // Stop any currently playing note immediately
+  if(edAudNode){
+    try{
+      edAudNode.gain.cancelScheduledValues(edAudCtx.currentTime);
+      edAudNode.gain.setValueAtTime(0.0001,edAudCtx.currentTime);
+      edAudNode.gain.exponentialRampToValueAtTime(0.0001,edAudCtx.currentTime+0.02);
+      edAudNode.osc.stop(edAudCtx.currentTime+0.03);
+    }catch(e){}
+    edAudNode=null;
+  }
   if(!edAudCtx||edAudCtx.state==="closed"){
     edAudCtx=new(window.AudioContext||window.webkitAudioContext)();
   }
@@ -1503,11 +1511,17 @@ function edPlayNote(midi){
   const gain=edAudCtx.createGain();
   osc.type="triangle";
   osc.frequency.value=midiToFreq(midi);
+  // Attack → sustain → release matching the note duration
+  const attack=0.02;
+  const release=Math.min(0.12, dur*0.2); // short release tail
+  const sustainEnd=t+attack+Math.max(0,dur-attack-release);
   gain.gain.setValueAtTime(0.0001,t);
-  gain.gain.exponentialRampToValueAtTime(0.28,t+0.02);
-  gain.gain.exponentialRampToValueAtTime(0.0001,t+0.45);
+  gain.gain.exponentialRampToValueAtTime(0.30,t+attack);       // attack
+  gain.gain.setValueAtTime(0.30,sustainEnd);                    // sustain
+  gain.gain.exponentialRampToValueAtTime(0.0001,sustainEnd+release); // release
   osc.connect(gain).connect(edAudCtx.destination);
-  osc.start(t); osc.stop(t+0.5);
+  osc.start(t);
+  osc.stop(sustainEnd+release+0.05);
   edAudNode={osc,gain};
 }
 
@@ -1584,7 +1598,7 @@ function edPointerMove(e){
   if(edDrag.mode==="move"){
     n.start=Math.max(0,+(edXTime(px)-edDrag.offT).toFixed(3));
     const newMidi=Math.max(ED_MIN,Math.min(ED_MAX,edYMidi(py)));
-    if(newMidi!==n.m){ n.m=newMidi; edPlayNote(newMidi); } // play on pitch change
+    if(newMidi!==n.m){ n.m=newMidi; edPlayNote(newMidi, n.dur); } // play on pitch change
     document.getElementById("edNoteName").textContent=noteName(n.m)+" · "+n.dur.toFixed(2)+"s";
   }else{
     const newEnd=edXTime(px);
