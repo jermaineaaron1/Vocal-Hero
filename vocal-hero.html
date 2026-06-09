@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-20';
+  var BUILD='build-20250608-21';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1044,14 +1044,16 @@ function endGame(){
 
 // ─── PREVIEW / SYNTH ─────────────────────────────────────────────────────────
 // Shared playback state — only one sound source plays at a time
-let _previewAc=null;      // current preview AudioContext
-let _previewTimer=null;   // its close-timeout
+let _previewAc=null;
+let _previewTimer=null;
+let _previewStartPerf=null;   // performance.now() when preview audio began
+let _previewEndPerf=null;     // performance.now() when preview should end
+let _previewSortedNotes=null; // notes array for highlight tracking
 
 function stopAllPreview(){
-  // Stop preview
   if(_previewTimer){clearTimeout(_previewTimer);_previewTimer=null;}
-  if(_previewAc){try{_previewAc.close();}catch(e){}  _previewAc=null;}
-  // Stop single-note audition
+  if(_previewAc){try{_previewAc.close();}catch(e){} _previewAc=null;}
+  _previewStartPerf=null; _previewEndPerf=null; _previewSortedNotes=null;
   if(edAudNode){
     try{
       edAudNode.gain.cancelScheduledValues(edAudCtx.currentTime);
@@ -1069,7 +1071,10 @@ function previewNotes(notes){
   const n=normalize(notes).slice().sort((a,b)=>a.start-b.start);if(!n.length)return;
   const ac=new(window.AudioContext||window.webkitAudioContext)();
   _previewAc=ac;
-  const t0=ac.currentTime+0.05;
+  const leadMs=80;
+  const t0=ac.currentTime+leadMs/1000;
+  _previewSortedNotes=n;
+  _previewStartPerf=performance.now()+leadMs;
   for(const x of n){
     const dur=Math.max(x.dur||0.1, 0.05);
     const st=t0+x.start;
@@ -1086,9 +1091,11 @@ function previewNotes(notes){
     o.stop(st+dur+0.05);
   }
   const end=t0+Math.max(...n.map(x=>x.start+(x.dur||0.1)),0.5);
+  _previewEndPerf=_previewStartPerf+(end-t0)*1000+300;
   _previewTimer=setTimeout(()=>{
     try{ac.close();}catch(e){}
-    if(_previewAc===ac)_previewAc=null;
+    if(_previewAc===ac){_previewAc=null;}
+    _previewStartPerf=null;_previewEndPerf=null;_previewSortedNotes=null;
   },(end-ac.currentTime+0.4)*1000);
 }
 
@@ -1340,6 +1347,16 @@ function saveEditorChanges(){
 // ── Editor draw loop ──────────────────────────────────────────────────────────
 function edLoop(){
   edAnimId=requestAnimationFrame(edLoop);
+  // Auto-scroll to follow preview playhead
+  if(_previewStartPerf&&_previewSortedNotes){
+    const el=(performance.now()-_previewStartPerf)/1000;
+    const activePN=_previewSortedNotes.find(x=>el>=x.start&&el<x.start+x.dur);
+    if(activePN){
+      const nx=edTimeX(activePN.start);
+      if(nx>edW*0.72||nx<ED_PIANO_W+20)
+        edScrollX=Math.max(0,activePN.start-(edW-ED_PIANO_W)*0.3/edPxS);
+    }
+  }
   drawEditorFrame();
 }
 
@@ -1379,6 +1396,13 @@ function drawEditorFrame(){
     edCtx.beginPath();edCtx.moveTo(x,0);edCtx.lineTo(x,edH);edCtx.stroke();
   }
 
+  // ── Compute preview active note ──
+  let previewActiveNote=null;
+  if(_previewStartPerf&&_previewSortedNotes){
+    const el=(performance.now()-_previewStartPerf)/1000;
+    previewActiveNote=_previewSortedNotes.find(x=>el>=x.start&&el<x.start+x.dur)||null;
+  }
+
   // ── Notes ──
   edNotes.forEach((n,i)=>{
     const x1=edTimeX(n.start);
@@ -1388,10 +1412,14 @@ function drawEditorFrame(){
     const y=edMidiY(n.m);
     const bw=Math.max(x2-x1,8);
     const isSel=(i===edSel);
+    const isPlaying=(previewActiveNote&&n===previewActiveNote);
 
     // Base bar
-    edCtx.fillStyle=isSel?"rgba(240,180,41,.95)":"rgba(80,100,210,.85)";
-    if(isSel){edCtx.shadowColor="rgba(240,180,41,.7)";edCtx.shadowBlur=16;}
+    if(isPlaying) edCtx.fillStyle="rgba(90,209,155,.95)";
+    else if(isSel) edCtx.fillStyle="rgba(240,180,41,.95)";
+    else edCtx.fillStyle="rgba(80,100,210,.85)";
+    if(isPlaying){edCtx.shadowColor="rgba(90,209,155,.8)";edCtx.shadowBlur=22;}
+    else if(isSel){edCtx.shadowColor="rgba(240,180,41,.7)";edCtx.shadowBlur=16;}
     edRR(cx1,y-ED_NOTE_H/2,Math.max(x2-Math.max(x1,ED_PIANO_W),6),ED_NOTE_H,ED_NOTE_H/2);
     edCtx.fill(); edCtx.shadowBlur=0;
 
@@ -1408,12 +1436,12 @@ function drawEditorFrame(){
     }
 
     // Lyric inside bar
-    const lyr=n.l||(n.l===''?'':'la');
+    const lyr=n.l||(n.l===''?'':'');
     const lyrX=cx1+6;
     const lyrMaxW=x2-lyrX-8;
     if(lyrMaxW>6&&lyr){
-      edCtx.fillStyle=isSel?"#1a1000":"rgba(255,255,255,.9)";
-      edCtx.font=(isSel?"bold ":"")+"12px 'DM Mono'";
+      edCtx.fillStyle=(isPlaying||isSel)?"#1a1000":"rgba(255,255,255,.9)";
+      edCtx.font=((isPlaying||isSel)?"bold ":"")+"12px 'DM Mono'";
       edCtx.textBaseline="middle";
       edCtx.save();
       edCtx.beginPath();edCtx.rect(lyrX,y-ED_NOTE_H/2,lyrMaxW,ED_NOTE_H);edCtx.clip();
@@ -1432,6 +1460,12 @@ function drawEditorFrame(){
 
   // ── Piano panel ──
   edDrawPiano();
+
+  // ── Preview lyrics overlay ──
+  if(_previewStartPerf&&_previewSortedNotes&&previewActiveNote){
+    drawEdPreviewLyrics(previewActiveNote);
+  }
+
   updateEdSentence();
 }
 
@@ -1472,6 +1506,47 @@ function edDrawPiano(){
   }
   edCtx.strokeStyle="rgba(100,120,220,.7)";edCtx.lineWidth=2;
   edCtx.beginPath();edCtx.moveTo(ED_PIANO_W,0);edCtx.lineTo(ED_PIANO_W,edH);edCtx.stroke();
+  edCtx.textAlign="left";edCtx.textBaseline="alphabetic";
+}
+
+function drawEdPreviewLyrics(activeNote){
+  const sorted=edNotes.slice().sort((a,b)=>a.start-b.start);
+  const panelH=90;
+  const py=edH-panelH;
+
+  // Background gradient
+  const grad=edCtx.createLinearGradient(0,py,0,edH);
+  grad.addColorStop(0,"rgba(11,16,38,0)");
+  grad.addColorStop(0.35,"rgba(11,16,38,.92)");
+  grad.addColorStop(1,"rgba(11,16,38,.97)");
+  edCtx.fillStyle=grad;
+  edCtx.fillRect(0,py,edW,panelH);
+
+  // Full sentence — syllables with active one highlighted
+  edCtx.textBaseline="middle";
+  edCtx.textAlign="left";
+  const fontSize=15;
+  edCtx.font=fontSize+"px 'DM Mono'";
+  const syllables=sorted.map(n=>({l:n.l||"♪",active:n===activeNote}));
+  let totalW=syllables.reduce((s,sv)=>s+edCtx.measureText(sv.l+" ").width,0);
+  let sx=edW/2-totalW/2;
+  syllables.forEach(sv=>{
+    edCtx.fillStyle=sv.active?"#f0b429":"rgba(154,160,200,.65)";
+    edCtx.font=(sv.active?"bold ":"")+fontSize+"px 'DM Mono'";
+    const tw=edCtx.measureText(sv.l+" ").width;
+    edCtx.fillText(sv.l,sx,edH-22);
+    sx+=tw;
+  });
+
+  // Large current syllable
+  const bigLyr=activeNote.l||"♪";
+  edCtx.font="bold 30px 'Fraunces', serif";
+  edCtx.textAlign="center";
+  edCtx.fillStyle="#f4f1e6";
+  edCtx.shadowColor="rgba(90,209,155,.6)";edCtx.shadowBlur=14;
+  edCtx.fillText(bigLyr,edW/2,edH-58);
+  edCtx.shadowBlur=0;
+
   edCtx.textAlign="left";edCtx.textBaseline="alphabetic";
 }
 
@@ -1580,8 +1655,22 @@ function bindEditorEvents(){
   edCv.addEventListener("pointerup",edPointerUp);
   edCv.addEventListener("pointercancel",edPointerUp);
   edCv.addEventListener("wheel",edWheel,{passive:false});
-  document.getElementById("edLyricInp").addEventListener("input",e=>{
-    if(edSel>=0&&edNotes[edSel]){edNotes[edSel].l=e.target.value;document.getElementById("edNoteName").textContent=noteName(edNotes[edSel].m)+" · "+edNotes[edSel].dur.toFixed(2)+"s";}
+  document.addEventListener("keydown",edKeyDown);
+  const inp=document.getElementById("edLyricInp");
+  inp.addEventListener("input",e=>{
+    if(edSel>=0&&edNotes[edSel]){
+      edNotes[edSel].l=e.target.value;
+      document.getElementById("edNoteName").textContent=noteName(edNotes[edSel].m)+" · "+edNotes[edSel].dur.toFixed(2)+"s";
+    }
+  });
+  // Enter key moves to next note
+  inp.addEventListener("keydown",e=>{
+    if(e.key==="Enter"){
+      e.preventDefault();
+      const sorted=edNotes.map((n,i)=>({n,i})).sort((a,b)=>a.n.start-b.n.start);
+      const curPos=sorted.findIndex(x=>x.i===edSel);
+      if(curPos>=0&&curPos<sorted.length-1) edSelectNote(sorted[curPos+1].i);
+    }
   });
 }
 
@@ -1641,6 +1730,17 @@ function edPointerMove(e){
 }
 
 function edPointerUp(){edDrag=null;}
+
+// Keyboard shortcuts in editor
+function edKeyDown(e){
+  // Don't intercept when typing in lyric input
+  if(e.target===document.getElementById("edLyricInp"))return;
+  if(e.key==="Delete"||e.key==="Backspace"){
+    e.preventDefault();
+    edDeleteSelected();
+  }
+  if(e.key==="Escape"){edSel=-1;edSelectNote(-1);}
+}
 
 function edWheel(e){
   e.preventDefault();
@@ -1784,11 +1884,15 @@ renderSongs();
   <div class="ed-bottom">
     <div class="ed-lyric-row">
       <span class="ed-note-name" id="edNoteName">—</span>
-      <input id="edLyricInp" type="text" placeholder="Select a note, then type its lyric here" disabled>
+      <label style="font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap">Lyric</label>
+      <input id="edLyricInp" type="text" placeholder="Click a note, then type its lyric · Enter = next note" disabled>
       <button class="ed-del" id="edDelBtn" disabled onclick="edDeleteSelected()">✕ Delete</button>
-      <button class="ed-add" onclick="edAddNote()">+ Add note</button>
+      <button class="ed-add" onclick="edAddNote()">+ Add</button>
     </div>
-    <div class="ed-sentence" id="edSentence">No notes yet</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px;padding-left:2px">
+      Keyboard: <strong>Delete</strong> = remove note &nbsp;·&nbsp; <strong>Enter</strong> = next note &nbsp;·&nbsp; <strong>Esc</strong> = deselect
+    </div>
+    <div class="ed-sentence" id="edSentence">No notes yet — click on the piano roll to add notes</div>
   </div>
 </section>
 </body>
