@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-14';
+  var BUILD='build-20250608-15';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1467,17 +1467,18 @@ function edSelectNote(i){
     nm.textContent=noteName(n.m)+" · "+n.dur.toFixed(2)+"s";
     inp.disabled=false; inp.value=n.l||""; inp.focus();
     del.disabled=false;
+    edPlayNote(n.m); // play the note so user can hear its pitch
   }else{
     nm.textContent="—"; inp.disabled=true; inp.value=""; del.disabled=true;
+    edLastPlayedMidi=-1;
   }
 }
 
 function edAddNote(){
-  // Add a note in the centre of the current view at A4
   const t=edScrollX+(edW-ED_PIANO_W)/(edPxS*2);
-  edNotes.push({m:69,start:+t.toFixed(3),dur:0.5,l:""});
-  edSelectNote(edNotes.length-1);
-  // Scroll so it's visible
+  const m=69; // A4 default
+  edNotes.push({m,start:+t.toFixed(3),dur:0.5,l:""});
+  edSelectNote(edNotes.length-1); // plays the note on select
   edScrollX=Math.max(0,t-1);
 }
 
@@ -1485,6 +1486,30 @@ function edDeleteSelected(){
   if(edSel<0)return;
   edNotes.splice(edSel,1);
   edSel=-1; edSelectNote(-1);
+}
+
+// ── Note audition (play a note so user can hear the pitch) ────────────────────
+let edAudCtx=null, edAudNode=null, edLastPlayedMidi=-1;
+function edPlayNote(midi){
+  if(midi===edLastPlayedMidi)return; // don't re-trigger same pitch
+  edLastPlayedMidi=midi;
+  // Stop any currently playing note
+  if(edAudNode){try{edAudNode.gain.cancelScheduledValues(0);edAudNode.gain.setValueAtTime(0,edAudCtx.currentTime);edAudNode.osc.stop();}catch(e){}}
+  if(!edAudCtx||edAudCtx.state==="closed"){
+    edAudCtx=new(window.AudioContext||window.webkitAudioContext)();
+  }
+  if(edAudCtx.state==="suspended")edAudCtx.resume();
+  const t=edAudCtx.currentTime;
+  const osc=edAudCtx.createOscillator();
+  const gain=edAudCtx.createGain();
+  osc.type="triangle";
+  osc.frequency.value=midiToFreq(midi);
+  gain.gain.setValueAtTime(0.0001,t);
+  gain.gain.exponentialRampToValueAtTime(0.28,t+0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001,t+0.45);
+  osc.connect(gain).connect(edAudCtx.destination);
+  osc.start(t); osc.stop(t+0.5);
+  edAudNode={osc,gain};
 }
 
 function edPreview(){
@@ -1559,7 +1584,8 @@ function edPointerMove(e){
   const n=edNotes[edDrag.idx];
   if(edDrag.mode==="move"){
     n.start=Math.max(0,+(edXTime(px)-edDrag.offT).toFixed(3));
-    n.m=Math.max(ED_MIN,Math.min(ED_MAX,edYMidi(py)));
+    const newMidi=Math.max(ED_MIN,Math.min(ED_MAX,edYMidi(py)));
+    if(newMidi!==n.m){ n.m=newMidi; edPlayNote(newMidi); } // play on pitch change
     document.getElementById("edNoteName").textContent=noteName(n.m)+" · "+n.dur.toFixed(2)+"s";
   }else{
     const newEnd=edXTime(px);
