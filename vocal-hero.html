@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-13';
+  var BUILD='build-20250608-14';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1487,6 +1487,12 @@ function edDeleteSelected(){
   edSel=-1; edSelectNote(-1);
 }
 
+function edPreview(){
+  if(!edNotes.length)return;
+  const sorted=edNotes.slice().sort((a,b)=>a.start-b.start);
+  previewNotes(sorted.map(n=>({m:n.m,start:n.start,dur:n.dur,l:n.l||"la"})));
+}
+
 function edZoom(dir){
   const levels=[60,80,100,120,160,210,280];
   let i=levels.findIndex(v=>v>=edPxS);
@@ -1699,6 +1705,7 @@ renderSongs();
       <span id="edZoomLabel">1×</span>
       <button onclick="edZoom(+1)">+</button>
     </div>
+    <button class="ed-tb-btn" onclick="edPreview()">▶ Preview</button>
     <button class="ed-tb-btn gold" onclick="saveEditorChanges()">💾 Save</button>
   </div>
   <canvas id="edCv" touch-action="none"></canvas>
