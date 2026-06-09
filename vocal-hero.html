@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-24';
+  var BUILD='build-20250608-25';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -210,16 +210,28 @@
     <div class="song-header" id="pgTitle"></div>
     <div class="song-sub" id="pgSub"></div>
 
-    <!-- Key / Transpose -->
+    <!-- Key / Transpose + Octave -->
     <div class="setting-block">
-      <span class="setting-label">🎵 Key — transpose the song to fit your voice</span>
+      <span class="setting-label">🎵 Key &amp; Octave — shift the song to fit your voice</span>
+      <!-- Semitone fine-tune row -->
+      <div style="font-size:10px;color:var(--muted);text-align:center;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">Semitone</div>
       <div class="transpose-row">
-        <button class="transpose-btn" id="transposeDown">−</button>
+        <button class="transpose-btn" id="transposeDown">−1</button>
         <div>
           <div class="key-display" id="keyDisplay">D major</div>
           <div style="font-size:11px;color:var(--muted);text-align:center" id="semitoneDisplay">Original key</div>
         </div>
-        <button class="transpose-btn" id="transposeUp">+</button>
+        <button class="transpose-btn" id="transposeUp">+1</button>
+      </div>
+      <!-- Octave jump row -->
+      <div style="font-size:10px;color:var(--muted);text-align:center;letter-spacing:.1em;text-transform:uppercase;margin:10px 0 6px">Octave</div>
+      <div class="transpose-row">
+        <button class="transpose-btn" id="octaveDown">−8va</button>
+        <div>
+          <div style="font-size:13px;color:var(--gold-soft);text-align:center;font-family:'DM Mono',monospace" id="octaveRange">—</div>
+          <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:2px">note range</div>
+        </div>
+        <button class="transpose-btn" id="octaveUp">+8va</button>
       </div>
     </div>
 
@@ -527,7 +539,7 @@ async function startMic(){
 }
 function detectPitch(buf,sr){
   let SIZE=buf.length,rms=0;for(let i=0;i<SIZE;i++){const v=buf[i];rms+=v*v;}rms=Math.sqrt(rms/SIZE);
-  if(rms<0.028)return -1; // raised threshold — ignore quiet background noise
+  if(rms<0.025)return -1; // noise gate (10% more sensitive than before)
   let r1=0,r2=SIZE-1;const th=0.2;
   for(let i=0;i<SIZE/2;i++){if(Math.abs(buf[i])<th){r1=i;break;}}
   for(let i=1;i<SIZE/2;i++){if(Math.abs(buf[SIZE-i])<th){r2=SIZE-i;break;}}
@@ -625,12 +637,24 @@ function songBaseKey(song){
 }
 
 function updateKeyDisplay(){
-  const base=pendingSong?songBaseKey(pendingSong):2; // D default
+  const base=pendingSong?songBaseKey(pendingSong):2;
   const transposed=((base+gameTranspose)%12+12)%12;
   const keyName=NN[transposed]+" major";
   $("keyDisplay").textContent=keyName;
-  $("semitoneDisplay").textContent=gameTranspose===0?"Original key":
+
+  // Semitone label (show only the ±semitone fine-tune, excluding full octave shifts)
+  const semiOnly=((gameTranspose%12)+12)%12;
+  const semiLabel=gameTranspose===0?"Original key":
     (gameTranspose>0?"+"+gameTranspose:" "+gameTranspose)+" semitone"+(Math.abs(gameTranspose)===1?"":"s");
+  $("semitoneDisplay").textContent=semiLabel;
+
+  // Compute the actual note range of the song after transposition
+  if(pendingSong){
+    const norm=normalize(pendingSong.notes);
+    const midis=norm.map(n=>foldMidi(n.m+gameTranspose));
+    const lo=Math.min(...midis), hi=Math.max(...midis);
+    $("octaveRange").textContent=noteName(lo)+" – "+noteName(hi);
+  }
 }
 
 function buildVoicePills(){
@@ -1950,9 +1974,11 @@ function renderSongs(){
 (function fillKeys(){const sel=$("keySel");NN.forEach((n,i)=>{const o=document.createElement("option");o.value=i;o.textContent=n+" major";sel.appendChild(o);});})();
 
 // ─── EVENT LISTENERS ─────────────────────────────────────────────────────────
-// Pre-game controls
+// Pre-game controls — semitone fine-tune (±6) and octave jumps (±12)
 $("transposeDown").onclick=()=>{if(gameTranspose>-6)gameTranspose--;updateKeyDisplay();};
 $("transposeUp").onclick=()=>{if(gameTranspose<6)gameTranspose++;updateKeyDisplay();};
+$("octaveDown").onclick=()=>{gameTranspose-=12;updateKeyDisplay();};
+$("octaveUp").onclick=()=>{gameTranspose+=12;updateKeyDisplay();};
 $("pgStart").onclick=startGameWithSettings;
 
 $("rAgain").onclick=()=>{pendingSong=game.song;openPregame(game.song);};
