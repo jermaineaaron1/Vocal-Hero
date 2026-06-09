@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-9';
+  var BUILD='build-20250608-10';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -122,11 +122,12 @@
   .empty{padding:24px;text-align:center;color:var(--muted);font-size:12px}
   /* Score popup */
   .score-popup{position:absolute;pointer-events:none;font-family:"Fraunces",serif;font-size:18px;font-weight:700;color:var(--hit);text-shadow:0 0 12px rgba(90,209,155,.8)}
-  /* Song card edit/audio buttons */
-  .song{position:relative}
-  .song-btns{display:flex;gap:6px;flex-shrink:0}
-  .song-icon-btn{background:transparent;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:12px;padding:5px 9px;cursor:pointer;transition:.15s;white-space:nowrap}
-  .song-icon-btn:hover{border-color:var(--gold);color:var(--gold)}
+  /* Song card edit button */
+  .song{position:relative;cursor:default!important}
+  .song-main{flex:1;cursor:pointer}
+  .song-btns{display:flex;gap:8px;flex-shrink:0;align-items:center}
+  .edit-btn{background:rgba(240,180,41,.12);border:1.5px solid var(--gold);border-radius:8px;color:var(--gold-soft);font-family:"DM Mono",monospace;font-size:12px;font-weight:500;padding:6px 12px;cursor:pointer;transition:.15s;white-space:nowrap}
+  .edit-btn:hover{background:rgba(240,180,41,.25);color:#fff;transform:translateY(-1px)}
   /* Audio upload on pregame */
   .audio-upload-area{border:1px dashed var(--line);border-radius:12px;padding:14px;text-align:center;cursor:pointer;transition:.15s;margin-top:8px}
   .audio-upload-area:hover{border-color:var(--gold-soft)}
@@ -1266,15 +1267,17 @@ function renderSongs(){
     el.className="song";
     el.style.cursor="default";
     el.innerHTML=`
-      <div style="flex:1;cursor:pointer" class="song-main">
+      <div class="song-main">
         <h3>${s.title}</h3><p>${s.sub}</p>
       </div>
       <div class="song-btns">
-        <button class="song-icon-btn edit-btn" title="Edit notes & lyrics">✏️ Edit</button>
+        <button class="edit-btn">✏ Edit</button>
         <span class="lvl">${s.level}</span>
       </div>`;
     el.querySelector(".song-main").onclick=()=>launch(s);
     el.querySelector(".edit-btn").onclick=e=>{e.stopPropagation();openSongEditor(idx);};
+    el.querySelector(".lvl").style.cursor="pointer";
+    el.querySelector(".lvl").onclick=()=>launch(s);
     w.appendChild(el);
   });
 }
