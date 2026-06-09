@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-10';
+  var BUILD='build-20250608-11';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1154,7 +1154,7 @@ function saveEditedSong(){
   // Persist to localStorage
   persistSongs();
   renderSongs();
-  alert("✅ Changes saved to ""+draft.title+""");
+  alert("Changes saved to: " + draft.title);
   show("home");
 }
 
