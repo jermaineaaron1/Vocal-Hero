@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-22';
+  var BUILD='build-20250608-23';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -136,7 +136,7 @@
   /* Editor save-edit button */
   .btn.save-edit{background:var(--hit);color:#001a0d}
   /* ── Full-screen Song Editor ───────────────────────────── */
-  #songEditor{position:fixed;inset:0;display:none;flex-direction:column;background:var(--bg);z-index:10}
+  #songEditor{position:fixed;inset:0;display:none;flex-direction:column;background:var(--bg);z-index:10;overflow:hidden}
   #songEditor.on{display:flex}
   .ed-toolbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:rgba(11,16,38,.95);border-bottom:1px solid var(--line);flex-shrink:0;z-index:2}
   .ed-song-name{font-family:"Fraunces",serif;font-size:18px;font-weight:700;color:var(--ink);flex:1;text-align:center}
@@ -147,6 +147,17 @@
   .ed-tb-btn.gold{background:var(--gold);color:#241a00;border-color:var(--gold);font-weight:600}
   .ed-tb-btn.gold:hover{background:var(--gold-soft)}
   #edCv{flex:1;display:block;width:100%;cursor:crosshair;touch-action:none}
+  /* Floating lyric bubble on selected note */
+  #edFloatLyric{
+    position:absolute;display:none;z-index:20;
+    background:#0b1026;border:2px solid var(--gold);border-radius:10px;
+    padding:6px 10px;font-family:"DM Mono",monospace;font-size:14px;
+    color:var(--ink);outline:none;width:160px;
+    box-shadow:0 4px 24px rgba(240,180,41,.35);
+    caret-color:var(--gold);
+  }
+  #edFloatLyric::placeholder{color:rgba(154,160,200,.5);font-size:12px}
+  #edFloatLyric.on{display:block}
   .ed-bottom{flex-shrink:0;background:rgba(11,16,38,.95);border-top:1px solid var(--line);padding:10px 14px 14px}
   .ed-lyric-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .ed-note-name{font-size:13px;color:var(--gold-soft);min-width:56px;font-weight:600}
@@ -1592,16 +1603,36 @@ function edSelectNote(i){
   const inp=document.getElementById("edLyricInp");
   const del=document.getElementById("edDelBtn");
   const nm=document.getElementById("edNoteName");
+  const floatInp=document.getElementById("edFloatLyric");
   if(i>=0&&edNotes[i]){
     const n=edNotes[i];
     nm.textContent=noteName(n.m)+" · "+n.dur.toFixed(2)+"s";
-    inp.disabled=false; inp.value=n.l||""; inp.focus();
+    inp.disabled=false; inp.value=n.l||"";
     del.disabled=false;
-    edPlayNote(n.m, n.dur); // play at full note duration
+    edPlayNote(n.m, n.dur);
+    // Show floating lyric bubble on/above the note
+    edPositionFloatLyric(n, floatInp);
   }else{
-    nm.textContent="—"; inp.disabled=true; inp.value=""; del.disabled=true;
-    edLastPlayedMidi=-1;
+    nm.textContent="—"; inp.disabled=true; inp.value="";
+    del.disabled=true; edLastPlayedMidi=-1;
+    floatInp.classList.remove("on");
   }
+}
+
+function edPositionFloatLyric(n, floatInp){
+  if(!floatInp)return;
+  const toolbar=document.querySelector(".ed-toolbar");
+  const toolbarH=toolbar?toolbar.offsetHeight:44;
+  const x=Math.max(ED_PIANO_W+4, Math.min(edTimeX(n.start), edW-168));
+  const y=edMidiY(n.m)-ED_NOTE_H/2-46; // above the note
+  // Clamp so it stays inside the canvas area
+  const clampedY=Math.max(toolbarH+4, y);
+  floatInp.style.left=x+"px";
+  floatInp.style.top=(clampedY+toolbarH)+"px";
+  floatInp.value=n.l||"";
+  floatInp.classList.add("on");
+  // Small delay so canvas pointer-capture doesn't steal focus
+  setTimeout(()=>floatInp.focus(),50);
 }
 
 function edAddNote(){
@@ -1615,7 +1646,9 @@ function edAddNote(){
 function edDeleteSelected(){
   if(edSel<0)return;
   edNotes.splice(edSel,1);
-  edSel=-1; edSelectNote(-1);
+  edSel=-1;
+  document.getElementById("edFloatLyric").classList.remove("on");
+  edSelectNote(-1);
 }
 
 // ── Note audition (play a note so user can hear the pitch) ────────────────────
@@ -1678,21 +1711,37 @@ function bindEditorEvents(){
   edCv.addEventListener("pointercancel",edPointerUp);
   edCv.addEventListener("wheel",edWheel,{passive:false});
   document.addEventListener("keydown",edKeyDown);
+  // Bottom bar lyric input sync
   const inp=document.getElementById("edLyricInp");
   inp.addEventListener("input",e=>{
     if(edSel>=0&&edNotes[edSel]){
       edNotes[edSel].l=e.target.value;
-      document.getElementById("edNoteName").textContent=noteName(edNotes[edSel].m)+" · "+edNotes[edSel].dur.toFixed(2)+"s";
+      document.getElementById("edFloatLyric").value=e.target.value;
     }
   });
-  // Enter key moves to next note
-  inp.addEventListener("keydown",e=>{
+
+  // Floating lyric input — the primary lyrics entry
+  const floatInp=document.getElementById("edFloatLyric");
+  floatInp.addEventListener("input",e=>{
+    if(edSel>=0&&edNotes[edSel]){
+      edNotes[edSel].l=e.target.value;
+      inp.value=e.target.value; // keep bottom bar in sync
+    }
+  });
+  floatInp.addEventListener("keydown",e=>{
     if(e.key==="Enter"){
       e.preventDefault();
+      // Move to next note in time order
       const sorted=edNotes.map((n,i)=>({n,i})).sort((a,b)=>a.n.start-b.n.start);
       const curPos=sorted.findIndex(x=>x.i===edSel);
       if(curPos>=0&&curPos<sorted.length-1) edSelectNote(sorted[curPos+1].i);
+      else floatInp.blur();
     }
+    if(e.key==="Escape"){
+      e.preventDefault();
+      floatInp.blur();
+    }
+    e.stopPropagation(); // prevent delete/escape reaching canvas handler
   });
 }
 
@@ -1762,7 +1811,14 @@ function edPointerMove(e){
   }
 }
 
-function edPointerUp(){edDrag=null;}
+function edPointerUp(){
+  if(edDrag&&edSel>=0&&edNotes[edSel]){
+    // Reposition float input after drag
+    const floatInp=document.getElementById("edFloatLyric");
+    edPositionFloatLyric(edNotes[edSel],floatInp);
+  }
+  edDrag=null;
+}
 
 // Keyboard shortcuts in editor
 function edKeyDown(e){
@@ -1914,6 +1970,7 @@ renderSongs();
     <button class="ed-tb-btn gold" onclick="saveEditorChanges()">💾 Save</button>
   </div>
   <canvas id="edCv" touch-action="none"></canvas>
+  <input id="edFloatLyric" type="text" placeholder="type lyric…" autocomplete="off" spellcheck="false">
   <div class="ed-bottom">
     <div class="ed-lyric-row">
       <span class="ed-note-name" id="edNoteName">—</span>
