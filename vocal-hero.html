@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-25';
+  var BUILD='build-20250608-26';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -190,6 +190,12 @@
   .transpose-btn{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--ink);font-size:20px;cursor:pointer;transition:.15s;display:flex;align-items:center;justify-content:center}
   .transpose-btn:hover{border-color:var(--gold);color:var(--gold)}
   .voice-info{font-size:11px;color:var(--muted);margin-top:8px;text-align:center}
+  /* Key pill grid */
+  .key-pills{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin:8px 0}
+  .key-pill{font-family:"DM Mono",monospace;font-size:12px;padding:7px 4px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer;transition:.15s;text-align:center}
+  .key-pill:hover{border-color:var(--gold-soft);color:var(--ink)}
+  .key-pill.on{background:rgba(240,180,41,.18);border-color:var(--gold);color:var(--gold-soft);font-weight:600}
+  .key-range{font-size:12px;color:var(--gold-soft);text-align:center;margin-top:6px;font-family:"DM Mono",monospace;min-height:18px}
 </style>
 </head>
 <body>
@@ -210,26 +216,22 @@
     <div class="song-header" id="pgTitle"></div>
     <div class="song-sub" id="pgSub"></div>
 
-    <!-- Key / Transpose + Octave -->
+    <!-- Key & Octave -->
     <div class="setting-block">
-      <span class="setting-label">🎵 Key &amp; Octave — shift the song to fit your voice</span>
-      <!-- Semitone fine-tune row -->
-      <div style="font-size:10px;color:var(--muted);text-align:center;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">Semitone</div>
-      <div class="transpose-row">
-        <button class="transpose-btn" id="transposeDown">−1</button>
-        <div>
-          <div class="key-display" id="keyDisplay">D major</div>
-          <div style="font-size:11px;color:var(--muted);text-align:center" id="semitoneDisplay">Original key</div>
-        </div>
-        <button class="transpose-btn" id="transposeUp">+1</button>
-      </div>
-      <!-- Octave jump row -->
-      <div style="font-size:10px;color:var(--muted);text-align:center;letter-spacing:.1em;text-transform:uppercase;margin:10px 0 6px">Octave</div>
+      <span class="setting-label">🎵 Key &amp; Octave — transpose the song to fit your voice</span>
+
+      <!-- Key picker: 12 major keys -->
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Select Key</div>
+      <div class="key-pills" id="keyPills"></div>
+      <div class="key-range" id="keyRange">—</div>
+
+      <!-- Octave jump -->
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin:12px 0 6px">Octave</div>
       <div class="transpose-row">
         <button class="transpose-btn" id="octaveDown">−8va</button>
         <div>
-          <div style="font-size:13px;color:var(--gold-soft);text-align:center;font-family:'DM Mono',monospace" id="octaveRange">—</div>
-          <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:2px">note range</div>
+          <div class="key-display" id="keyDisplay">D major</div>
+          <div class="key-range" id="octaveRange" style="margin-top:4px">—</div>
         </div>
         <button class="transpose-btn" id="octaveUp">+8va</button>
       </div>
@@ -500,9 +502,11 @@ const VOICE_RANGES=[
 ];
 let selectedVoice=VOICE_RANGES[2]; // default: Tenor
 
-// Key transposition
-let gameTranspose=0;
-let pendingSong=null; // song waiting to be launched after settings
+// Key transposition — split into semitone (key picker) + octave (±12)
+let gameSemiShift=0;   // set by key picker
+let gameOctaveShift=0; // set by octave buttons (multiples of 12)
+let gameTranspose=0;   // = gameSemiShift + gameOctaveShift (always kept in sync)
+let pendingSong=null;
 const SCALE=[0,2,4,5,7,9,11];
 const foldMidi=m=>{while(m<MIN_MIDI-1)m+=12;while(m>MAX_MIDI+1)m-=12;return Math.min(MAX_MIDI,Math.max(MIN_MIDI,m));};
 
@@ -601,14 +605,14 @@ function getMultiplier(){
 
 function launch(song){
   pendingSong=song;
-  gameTranspose=0;
+  gameSemiShift=0; gameOctaveShift=0; gameTranspose=0;
   openPregame(song);
 }
 
 function openPregame(song){
   $("pgTitle").textContent=song.title;
   $("pgSub").textContent=song.sub+" · "+song.level;
-  updateKeyDisplay();
+  updateKeyDisplay(); // also calls renderKeyPills
   buildVoicePills();
   // Reset audio upload UI
   pregameAudioUrl=song._audioUrl||null;
@@ -636,25 +640,45 @@ function songBaseKey(song){
   return best;
 }
 
+function noteRangeStr(transpose){
+  if(!pendingSong)return "—";
+  const norm=normalize(pendingSong.notes);
+  const midis=norm.map(n=>foldMidi(n.m+transpose));
+  return noteName(Math.min(...midis))+" – "+noteName(Math.max(...midis));
+}
+
 function updateKeyDisplay(){
+  gameTranspose=gameSemiShift+gameOctaveShift;
   const base=pendingSong?songBaseKey(pendingSong):2;
-  const transposed=((base+gameTranspose)%12+12)%12;
-  const keyName=NN[transposed]+" major";
-  $("keyDisplay").textContent=keyName;
+  const transposedPc=((base+gameTranspose)%12+12)%12;
+  $("keyDisplay").textContent=NN[transposedPc]+" major";
+  $("keyRange").textContent=noteRangeStr(gameTranspose);
+  $("octaveRange").textContent=noteRangeStr(gameTranspose);
+  renderKeyPills();
+}
 
-  // Semitone label (show only the ±semitone fine-tune, excluding full octave shifts)
-  const semiOnly=((gameTranspose%12)+12)%12;
-  const semiLabel=gameTranspose===0?"Original key":
-    (gameTranspose>0?"+"+gameTranspose:" "+gameTranspose)+" semitone"+(Math.abs(gameTranspose)===1?"":"s");
-  $("semitoneDisplay").textContent=semiLabel;
+function renderKeyPills(){
+  const wrap=$("keyPills");
+  if(!wrap)return;
+  const base=pendingSong?songBaseKey(pendingSong):2;
+  const activePc=((base+gameSemiShift)%12+12)%12;
+  wrap.innerHTML="";
+  NN.forEach((name,pc)=>{
+    const btn=document.createElement("button");
+    btn.className="key-pill"+(pc===activePc?" on":"");
+    btn.textContent=name;
+    btn.onclick=()=>pickKey(pc);
+    wrap.appendChild(btn);
+  });
+}
 
-  // Compute the actual note range of the song after transposition
-  if(pendingSong){
-    const norm=normalize(pendingSong.notes);
-    const midis=norm.map(n=>foldMidi(n.m+gameTranspose));
-    const lo=Math.min(...midis), hi=Math.max(...midis);
-    $("octaveRange").textContent=noteName(lo)+" – "+noteName(hi);
-  }
+function pickKey(targetPc){
+  const base=pendingSong?songBaseKey(pendingSong):2;
+  // Compute shortest semitone path from base key to target key
+  let semi=((targetPc-base)%12+12)%12;
+  if(semi>6)semi-=12; // prefer going down if closer
+  gameSemiShift=semi;
+  updateKeyDisplay();
 }
 
 function buildVoicePills(){
@@ -1974,11 +1998,9 @@ function renderSongs(){
 (function fillKeys(){const sel=$("keySel");NN.forEach((n,i)=>{const o=document.createElement("option");o.value=i;o.textContent=n+" major";sel.appendChild(o);});})();
 
 // ─── EVENT LISTENERS ─────────────────────────────────────────────────────────
-// Pre-game controls — semitone fine-tune (±6) and octave jumps (±12)
-$("transposeDown").onclick=()=>{if(gameTranspose>-6)gameTranspose--;updateKeyDisplay();};
-$("transposeUp").onclick=()=>{if(gameTranspose<6)gameTranspose++;updateKeyDisplay();};
-$("octaveDown").onclick=()=>{gameTranspose-=12;updateKeyDisplay();};
-$("octaveUp").onclick=()=>{gameTranspose+=12;updateKeyDisplay();};
+// Pre-game controls — key pills handle semitone, these handle octave only
+$("octaveDown").onclick=()=>{gameOctaveShift-=12;updateKeyDisplay();};
+$("octaveUp").onclick=()=>{gameOctaveShift+=12;updateKeyDisplay();};
 $("pgStart").onclick=startGameWithSettings;
 
 $("rAgain").onclick=()=>{pendingSong=game.song;openPregame(game.song);};
