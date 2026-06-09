@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-11';
+  var BUILD='build-20250608-12';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -135,6 +135,35 @@
   .audio-status{font-size:12px;color:var(--hit);margin-top:6px;min-height:16px}
   /* Editor save-edit button */
   .btn.save-edit{background:var(--hit);color:#001a0d}
+  /* ── Full-screen Song Editor ───────────────────────────── */
+  #songEditor{position:fixed;inset:0;display:none;flex-direction:column;background:var(--bg);z-index:10}
+  #songEditor.on{display:flex}
+  .ed-toolbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:rgba(11,16,38,.95);border-bottom:1px solid var(--line);flex-shrink:0;z-index:2}
+  .ed-song-name{font-family:"Fraunces",serif;font-size:18px;font-weight:700;color:var(--ink);flex:1;text-align:center}
+  .ed-hint{font-size:11px;color:var(--muted);display:none}
+  @media(min-width:600px){.ed-hint{display:inline}}
+  .ed-tb-btn{font-family:"DM Mono",monospace;font-size:12px;padding:7px 14px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer;transition:.15s;white-space:nowrap}
+  .ed-tb-btn:hover{border-color:var(--gold);color:var(--gold)}
+  .ed-tb-btn.gold{background:var(--gold);color:#241a00;border-color:var(--gold);font-weight:600}
+  .ed-tb-btn.gold:hover{background:var(--gold-soft)}
+  #edCv{flex:1;display:block;width:100%;cursor:crosshair;touch-action:none}
+  .ed-bottom{flex-shrink:0;background:rgba(11,16,38,.95);border-top:1px solid var(--line);padding:10px 14px 14px}
+  .ed-lyric-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .ed-note-name{font-size:13px;color:var(--gold-soft);min-width:56px;font-weight:600}
+  #edLyricInp{flex:1;min-width:120px;font-family:"DM Mono",monospace;background:#10142e;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px 11px;font-size:14px}
+  #edLyricInp:focus{outline:none;border-color:var(--gold)}
+  #edLyricInp:disabled{opacity:.4}
+  .ed-del{font-family:"DM Mono",monospace;font-size:12px;padding:7px 12px;border-radius:8px;border:1px solid var(--miss);background:transparent;color:var(--miss);cursor:pointer}
+  .ed-del:disabled{opacity:.3;cursor:default}
+  .ed-add{font-family:"DM Mono",monospace;font-size:12px;padding:7px 12px;border-radius:8px;border:1px solid var(--hit);background:transparent;color:var(--hit);cursor:pointer}
+  .ed-sentence{margin-top:8px;font-size:13px;color:var(--muted);line-height:1.7;min-height:20px;word-spacing:4px}
+  .ed-sentence .syl-sel{color:var(--gold);font-weight:700;text-shadow:0 0 10px rgba(240,180,41,.6)}
+  .ed-sentence .syl-norm{color:rgba(154,160,200,.7);cursor:pointer}
+  .ed-sentence .syl-norm:hover{color:var(--ink)}
+  .ed-zoom{display:flex;align-items:center;gap:6px}
+  .ed-zoom button{width:26px;height:26px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center}
+  .ed-zoom button:hover{border-color:var(--gold);color:var(--gold)}
+  .ed-zoom span{font-size:11px;color:var(--muted);min-width:32px;text-align:center}
   /* Pre-game settings screen */
   #pregame .wrap{width:min(500px,94vw);text-align:center}
   #pregame .song-header{font-family:"Fraunces",serif;font-size:clamp(22px,5vw,34px);font-weight:800;line-height:1.1}
@@ -1218,6 +1247,330 @@ function stopBackingTrack(){
   if(gameAudio){gameAudio.pause();gameAudio.currentTime=0;gameAudio=null;}
 }
 
+// ─── FULL-SCREEN SONG EDITOR ─────────────────────────────────────────────────
+let edNotes=[];        // working copy of notes being edited
+let edSongIdx=-1;      // which SONGS[] index we're editing
+let edSel=-1;          // selected note index
+let edDrag=null;       // {mode:'move'|'resize', idx, offT, offM, startX, startY}
+let edScrollX=0;       // horizontal scroll in seconds
+let edPxS=120;         // pixels per second zoom
+let edAnimId=null;
+const ED_NOTE_H=22;
+const ED_PIANO_W=72;
+const ED_MIN=36, ED_MAX=84; // full piano range C2-C6
+
+let edCv,edCtx,edW=0,edH=0;
+
+function initSongEditor(){
+  edCv=document.getElementById("edCv");
+  edCtx=edCv.getContext("2d");
+  bindEditorEvents();
+  window.addEventListener("resize",resizeEdCv);
+}
+
+function resizeEdCv(){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  edW=edCv.clientWidth; edH=edCv.clientHeight;
+  edCv.width=edW*dpr; edCv.height=edH*dpr;
+  edCtx.setTransform(dpr,0,0,dpr,0,0);
+}
+
+function openSongEditor(idx){
+  edSongIdx=idx;
+  const s=SONGS[idx];
+  const norm=normalize(s.notes).slice().sort((a,b)=>a.start-b.start);
+  edNotes=norm.map(n=>({m:n.m,start:+n.start.toFixed(3),dur:+(n.dur||n.d||0.5).toFixed(3),l:n.l==="la"?"":n.l||""}));
+  edSel=-1; edScrollX=0;
+  document.getElementById("edSongName").textContent=s.title;
+  document.getElementById("songEditor").classList.add("on");
+  requestAnimationFrame(()=>{resizeEdCv();edLoop();});
+}
+
+function exitEditorNoSave(){
+  cancelAnimationFrame(edAnimId);
+  document.getElementById("songEditor").classList.remove("on");
+}
+
+function saveEditorChanges(){
+  if(edSongIdx<0)return;
+  const orig=SONGS[edSongIdx];
+  const sorted=edNotes.slice().sort((a,b)=>a.start-b.start);
+  SONGS[edSongIdx]={...orig,notes:sorted.map(n=>({m:n.m,start:+n.start.toFixed(3),d:+n.dur.toFixed(3),l:n.l||"la"}))};
+  persistSongs(); renderSongs();
+  exitEditorNoSave();
+}
+
+// ── Editor draw loop ──────────────────────────────────────────────────────────
+function edLoop(){
+  edAnimId=requestAnimationFrame(edLoop);
+  drawEditorFrame();
+}
+
+function edMidiY(m){return edH-((m-ED_MIN)/(ED_MAX-ED_MIN))*edH;}
+function edTimeX(t){return ED_PIANO_W+(t-edScrollX)*edPxS;}
+function edYMidi(y){return Math.round(ED_MIN+(1-y/edH)*(ED_MAX-ED_MIN));}
+function edXTime(x){return (x-ED_PIANO_W)/edPxS+edScrollX;}
+
+function drawEditorFrame(){
+  edCtx.clearRect(0,0,edW,edH);
+  const rowH=edH/(ED_MAX-ED_MIN+1);
+  const BLACK_PCS=[1,3,6,8,10];
+
+  // ── Lane rows ──
+  for(let m=ED_MIN;m<=ED_MAX;m++){
+    const y=edMidiY(m);
+    const pc=((m%12)+12)%12;
+    const isBlack=BLACK_PCS.includes(pc);
+    const isC=(pc===0);
+    edCtx.fillStyle=isBlack?"rgba(8,11,32,.7)":"rgba(18,22,55,.5)";
+    edCtx.fillRect(ED_PIANO_W,y-rowH/2,edW-ED_PIANO_W,rowH);
+    if(isC){
+      edCtx.strokeStyle="rgba(240,180,41,.25)";
+      edCtx.lineWidth=1;
+      edCtx.beginPath();edCtx.moveTo(ED_PIANO_W,y);edCtx.lineTo(edW,y);edCtx.stroke();
+    }
+  }
+
+  // ── Beat grid ──
+  const beatSec=0.789; // approx BPM 76
+  const startBeat=Math.floor(edScrollX/beatSec);
+  const endBeat=Math.ceil((edScrollX+(edW-ED_PIANO_W)/edPxS)/beatSec)+1;
+  for(let b=startBeat;b<=endBeat;b++){
+    const x=edTimeX(b*beatSec);
+    edCtx.strokeStyle=b%4===0?"rgba(255,255,255,.18)":"rgba(255,255,255,.06)";
+    edCtx.lineWidth=b%4===0?1.5:0.7;
+    edCtx.beginPath();edCtx.moveTo(x,0);edCtx.lineTo(x,edH);edCtx.stroke();
+  }
+
+  // ── Notes ──
+  edNotes.forEach((n,i)=>{
+    const x1=edTimeX(n.start);
+    const x2=edTimeX(n.start+n.dur);
+    if(x2<ED_PIANO_W||x1>edW)return;
+    const cx1=Math.max(x1,ED_PIANO_W);
+    const y=edMidiY(n.m);
+    const bw=Math.max(x2-x1,8);
+    const isSel=(i===edSel);
+
+    // Base bar
+    edCtx.fillStyle=isSel?"rgba(240,180,41,.95)":"rgba(80,100,210,.85)";
+    if(isSel){edCtx.shadowColor="rgba(240,180,41,.7)";edCtx.shadowBlur=16;}
+    edRR(cx1,y-ED_NOTE_H/2,Math.max(x2-Math.max(x1,ED_PIANO_W),6),ED_NOTE_H,ED_NOTE_H/2);
+    edCtx.fill(); edCtx.shadowBlur=0;
+
+    // Border
+    edCtx.strokeStyle=isSel?"rgba(255,220,100,.9)":"rgba(100,120,240,.6)";
+    edCtx.lineWidth=isSel?2:1;
+    edRR(cx1,y-ED_NOTE_H/2,Math.max(x2-Math.max(x1,ED_PIANO_W),6),ED_NOTE_H,ED_NOTE_H/2);
+    edCtx.stroke();
+
+    // Resize handle (right edge)
+    if(x2<=edW){
+      edCtx.fillStyle=isSel?"rgba(255,255,255,.9)":"rgba(200,210,255,.5)";
+      edCtx.fillRect(x2-5,y-ED_NOTE_H/2+3,4,ED_NOTE_H-6);
+    }
+
+    // Lyric inside bar
+    const lyr=n.l||(n.l===''?'':'la');
+    const lyrX=cx1+6;
+    const lyrMaxW=x2-lyrX-8;
+    if(lyrMaxW>6&&lyr){
+      edCtx.fillStyle=isSel?"#1a1000":"rgba(255,255,255,.9)";
+      edCtx.font=(isSel?"bold ":"")+"12px 'DM Mono'";
+      edCtx.textBaseline="middle";
+      edCtx.save();
+      edCtx.beginPath();edCtx.rect(lyrX,y-ED_NOTE_H/2,lyrMaxW,ED_NOTE_H);edCtx.clip();
+      edCtx.fillText(lyr,lyrX,y);
+      edCtx.restore();
+      edCtx.textBaseline="alphabetic";
+    }
+
+    // Note name above bar
+    edCtx.fillStyle=isSel?"rgba(255,220,100,.9)":"rgba(154,160,200,.55)";
+    edCtx.font="9px 'DM Mono'";
+    edCtx.textBaseline="bottom";
+    if(cx1+4<edW)edCtx.fillText(noteName(n.m),cx1+4,y-ED_NOTE_H/2-1);
+    edCtx.textBaseline="alphabetic";
+  });
+
+  // ── Piano panel ──
+  edDrawPiano();
+  updateEdSentence();
+}
+
+function edRR(x,y,w,h,r){
+  if(w<=0)return;
+  r=Math.min(r,h/2,w/2);
+  edCtx.beginPath();edCtx.moveTo(x+r,y);edCtx.arcTo(x+w,y,x+w,y+h,r);edCtx.arcTo(x+w,y+h,x,y+h,r);edCtx.arcTo(x,y+h,x,y,r);edCtx.arcTo(x,y,x+w,y,r);edCtx.closePath();
+}
+
+function edDrawPiano(){
+  const rowH=edH/(ED_MAX-ED_MIN+1);
+  const BLACK_PCS=[1,3,6,8,10];
+  edCtx.fillStyle="#070b1e";
+  edCtx.fillRect(0,0,ED_PIANO_W,edH);
+  for(let m=ED_MIN;m<=ED_MAX;m++){
+    const y=edMidiY(m);
+    const pc=((m%12)+12)%12;
+    const isBlack=BLACK_PCS.includes(pc);
+    const isC=(pc===0);
+    edCtx.fillStyle=isBlack?"#111530":"#22285a";
+    edCtx.fillRect(1,y-rowH/2+0.5,ED_PIANO_W-4,rowH-1);
+    if(!isBlack){edCtx.fillStyle="rgba(255,255,255,.1)";edCtx.fillRect(ED_PIANO_W-7,y-rowH/2+0.5,5,rowH-1);}
+    // Label
+    const showLabel=isC||(rowH>=12&&!isBlack);
+    if(showLabel){
+      edCtx.fillStyle=isC?"#f0b429":"rgba(180,188,230,.7)";
+      edCtx.font=(isC?"bold ":"")+Math.min(10,rowH*0.65)+"px 'DM Mono'";
+      edCtx.textAlign="center";edCtx.textBaseline="middle";
+      edCtx.fillText(noteName(m),ED_PIANO_W/2,y);
+    }
+    // Highlight if selected note is on this pitch
+    if(edSel>=0&&edNotes[edSel]&&edNotes[edSel].m===m){
+      edCtx.fillStyle="rgba(240,180,41,.35)";
+      edCtx.fillRect(1,y-rowH/2,ED_PIANO_W-4,rowH);
+      edCtx.strokeStyle="rgba(240,180,41,.8)";edCtx.lineWidth=1.5;
+      edCtx.strokeRect(1.5,y-rowH/2+0.5,ED_PIANO_W-6,rowH-1);
+    }
+  }
+  edCtx.strokeStyle="rgba(100,120,220,.7)";edCtx.lineWidth=2;
+  edCtx.beginPath();edCtx.moveTo(ED_PIANO_W,0);edCtx.lineTo(ED_PIANO_W,edH);edCtx.stroke();
+  edCtx.textAlign="left";edCtx.textBaseline="alphabetic";
+}
+
+function updateEdSentence(){
+  const sorted=[...edNotes].sort((a,b)=>a.start-b.start);
+  const html=sorted.map((n,i)=>{
+    const origIdx=edNotes.indexOf(n);
+    const isSel=origIdx===edSel;
+    const lyr=n.l||"♪";
+    return `<span class="${isSel?"syl-sel":"syl-norm"}" data-idx="${origIdx}">${lyr}</span>`;
+  }).join(" ");
+  document.getElementById("edSentence").innerHTML=html||"No notes yet — click on the piano roll to add notes";
+  // Click on sentence syllable to select that note
+  document.querySelectorAll("#edSentence .syl-norm").forEach(el=>{
+    el.onclick=()=>edSelectNote(+el.dataset.idx);
+  });
+}
+
+function edSelectNote(i){
+  edSel=i;
+  const inp=document.getElementById("edLyricInp");
+  const del=document.getElementById("edDelBtn");
+  const nm=document.getElementById("edNoteName");
+  if(i>=0&&edNotes[i]){
+    const n=edNotes[i];
+    nm.textContent=noteName(n.m)+" · "+n.dur.toFixed(2)+"s";
+    inp.disabled=false; inp.value=n.l||""; inp.focus();
+    del.disabled=false;
+  }else{
+    nm.textContent="—"; inp.disabled=true; inp.value=""; del.disabled=true;
+  }
+}
+
+function edAddNote(){
+  // Add a note in the centre of the current view at A4
+  const t=edScrollX+(edW-ED_PIANO_W)/(edPxS*2);
+  edNotes.push({m:69,start:+t.toFixed(3),dur:0.5,l:""});
+  edSelectNote(edNotes.length-1);
+  // Scroll so it's visible
+  edScrollX=Math.max(0,t-1);
+}
+
+function edDeleteSelected(){
+  if(edSel<0)return;
+  edNotes.splice(edSel,1);
+  edSel=-1; edSelectNote(-1);
+}
+
+function edZoom(dir){
+  const levels=[60,80,100,120,160,210,280];
+  let i=levels.findIndex(v=>v>=edPxS);
+  i=Math.max(0,Math.min(levels.length-1,i+dir));
+  edPxS=levels[i];
+  document.getElementById("edZoomLabel")=levels[i]+"px/s";
+  document.getElementById("edZoomLabel").textContent=["¼×","⅓×","½×","1×","1.5×","2×","3×"][i];
+}
+
+// ── Editor pointer events ─────────────────────────────────────────────────────
+function bindEditorEvents(){
+  edCv.addEventListener("pointerdown",edPointerDown);
+  edCv.addEventListener("pointermove",edPointerMove);
+  edCv.addEventListener("pointerup",edPointerUp);
+  edCv.addEventListener("pointercancel",edPointerUp);
+  edCv.addEventListener("wheel",edWheel,{passive:false});
+  document.getElementById("edLyricInp").addEventListener("input",e=>{
+    if(edSel>=0&&edNotes[edSel]){edNotes[edSel].l=e.target.value;document.getElementById("edNoteName").textContent=noteName(edNotes[edSel].m)+" · "+edNotes[edSel].dur.toFixed(2)+"s";}
+  });
+}
+
+function edNoteAt(px,py){
+  // Returns {idx, isResize} or null
+  for(let i=edNotes.length-1;i>=0;i--){
+    const n=edNotes[i];
+    const x1=edTimeX(n.start), x2=edTimeX(n.start+n.dur);
+    const y=edMidiY(n.m);
+    if(px>=Math.max(x1,ED_PIANO_W)-2&&px<=x2+4&&Math.abs(py-y)<=ED_NOTE_H/2+2){
+      return{idx:i, isResize:px>=x2-8};
+    }
+  }
+  return null;
+}
+
+function edPointerDown(e){
+  e.preventDefault(); edCv.setPointerCapture(e.pointerId);
+  const r=edCv.getBoundingClientRect();
+  const px=e.clientX-r.left, py=e.clientY-r.top;
+  if(px<ED_PIANO_W)return; // ignore piano area
+  const hit=edNoteAt(px,py);
+  if(hit){
+    edSelectNote(hit.idx);
+    const n=edNotes[hit.idx];
+    edDrag={mode:hit.isResize?"resize":"move",idx:hit.idx,
+            offT:edXTime(px)-n.start, offM:edYMidi(py)-n.m,
+            startX:px,startY:py};
+  }else{
+    // Click empty = deselect (or add on double-click via dblclick)
+    edSel=-1; edSelectNote(-1);
+    // Create new note on empty area click
+    const t=Math.max(0,edXTime(px));
+    const m=Math.max(ED_MIN,Math.min(ED_MAX,edYMidi(py)));
+    edNotes.push({m,start:+t.toFixed(3),dur:0.4,l:""});
+    const newIdx=edNotes.length-1;
+    edSelectNote(newIdx);
+    edDrag={mode:"move",idx:newIdx,offT:0,offM:0,startX:px,startY:py};
+  }
+}
+
+function edPointerMove(e){
+  if(!edDrag)return;
+  const r=edCv.getBoundingClientRect();
+  const px=e.clientX-r.left, py=e.clientY-r.top;
+  const n=edNotes[edDrag.idx];
+  if(edDrag.mode==="move"){
+    n.start=Math.max(0,+(edXTime(px)-edDrag.offT).toFixed(3));
+    n.m=Math.max(ED_MIN,Math.min(ED_MAX,edYMidi(py)));
+    document.getElementById("edNoteName").textContent=noteName(n.m)+" · "+n.dur.toFixed(2)+"s";
+  }else{
+    const newEnd=edXTime(px);
+    n.dur=Math.max(0.1,+(newEnd-n.start).toFixed(3));
+    document.getElementById("edNoteName").textContent=noteName(n.m)+" · "+n.dur.toFixed(2)+"s";
+  }
+}
+
+function edPointerUp(){edDrag=null;}
+
+function edWheel(e){
+  e.preventDefault();
+  if(e.ctrlKey){
+    // Ctrl+wheel = zoom
+    edZoom(e.deltaY<0?1:-1);
+  }else{
+    // Scroll horizontally
+    edScrollX=Math.max(0,edScrollX+e.deltaY/edPxS*0.8);
+  }
+}
+
 // ─── PAUSE / EXIT ────────────────────────────────────────────────────────────
 let paused=false;
 function togglePause(){
@@ -1259,7 +1612,9 @@ document.addEventListener("keydown",e=>{
 });
 
 // ─── SCREEN ROUTING ──────────────────────────────────────────────────────────
-function show(id){for(const s of["home","pregame","play","result","create"]){const el=$(s);if(s==="play")el.classList.toggle("on",id==="play");else el.classList.toggle("on",id===s);}}
+function show(id){for(const s of["home","pregame","play","result","create"]){const el=$(s);if(s==="play")el.classList.toggle("on",id==="play");else el.classList.toggle("on",id===s);}
+// songEditor uses its own class, not screen system
+}
 function renderSongs(){
   const w=$("songlist");w.innerHTML="";
   SONGS.forEach((s,idx)=>{
@@ -1326,6 +1681,32 @@ document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{document.querySelect
 loadPersistedSongs();
 setupPregameAudio();
 renderSongs();
+initSongEditor();
 </script>
+
+<!-- ── Full-screen Song Editor ─────────────────────────────────────── -->
+<section id="songEditor">
+  <div class="ed-toolbar">
+    <button class="ed-tb-btn" onclick="exitEditorNoSave()">← Back</button>
+    <div class="ed-song-name" id="edSongName">Edit Song</div>
+    <div class="ed-hint">Drag note: move · Right edge: resize · Click empty: add note</div>
+    <div class="ed-zoom">
+      <button onclick="edZoom(-1)">−</button>
+      <span id="edZoomLabel">1×</span>
+      <button onclick="edZoom(+1)">+</button>
+    </div>
+    <button class="ed-tb-btn gold" onclick="saveEditorChanges()">💾 Save</button>
+  </div>
+  <canvas id="edCv" touch-action="none"></canvas>
+  <div class="ed-bottom">
+    <div class="ed-lyric-row">
+      <span class="ed-note-name" id="edNoteName">—</span>
+      <input id="edLyricInp" type="text" placeholder="Select a note, then type its lyric here" disabled>
+      <button class="ed-del" id="edDelBtn" disabled onclick="edDeleteSelected()">✕ Delete</button>
+      <button class="ed-add" onclick="edAddNote()">+ Add note</button>
+    </div>
+    <div class="ed-sentence" id="edSentence">No notes yet</div>
+  </div>
+</section>
 </body>
 </html>
