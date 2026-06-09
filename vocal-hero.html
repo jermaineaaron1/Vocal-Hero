@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250608-23';
+  var BUILD='build-20250608-24';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -1302,13 +1302,36 @@ function stopBackingTrack(){
 let edNotes=[];        // working copy of notes being edited
 let edSongIdx=-1;      // which SONGS[] index we're editing
 let edSel=-1;          // selected note index
-let edDrag=null;       // {mode:'move'|'resize', idx, offT, offM, startX, startY}
-let edScrollX=0;       // horizontal scroll in seconds
-let edPxS=120;         // pixels per second zoom
+let edDrag=null;
+let edScrollX=0;
+let edPxS=120;
 let edAnimId=null;
 const ED_NOTE_H=22;
 const ED_PIANO_W=72;
-const ED_MIN=36, ED_MAX=84; // full piano range C2-C6
+const ED_MIN=36, ED_MAX=84;
+// Undo / Redo stacks
+let edHistory=[], edFuture=[];
+function edPushHistory(){
+  edHistory.push(JSON.stringify(edNotes));
+  edFuture=[];
+  if(edHistory.length>60)edHistory.shift();
+}
+function edUndo(){
+  if(!edHistory.length)return;
+  edFuture.push(JSON.stringify(edNotes));
+  edNotes=JSON.parse(edHistory.pop());
+  edSel=-1;
+  document.getElementById("edFloatLyric").classList.remove("on");
+  edSelectNote(-1);
+}
+function edRedo(){
+  if(!edFuture.length)return;
+  edHistory.push(JSON.stringify(edNotes));
+  edNotes=JSON.parse(edFuture.pop());
+  edSel=-1;
+  document.getElementById("edFloatLyric").classList.remove("on");
+  edSelectNote(-1);
+}
 
 let edCv,edCtx,edW=0,edH=0;
 
@@ -1335,7 +1358,7 @@ function openSongEditor(idx){
   const s=SONGS[idx];
   const norm=normalize(s.notes).slice().sort((a,b)=>a.start-b.start);
   edNotes=norm.map(n=>({m:n.m,start:+n.start.toFixed(3),dur:+(n.dur||n.d||0.5).toFixed(3),l:n.l==="la"?"":n.l||""}));
-  edSel=-1; edScrollX=0;
+  edSel=-1; edScrollX=0; edHistory=[]; edFuture=[];
   document.getElementById("edSongName").textContent=s.title;
   document.getElementById("songEditor").classList.add("on");
   requestAnimationFrame(()=>{resizeEdCv();edLoop();});
@@ -1636,15 +1659,17 @@ function edPositionFloatLyric(n, floatInp){
 }
 
 function edAddNote(){
+  edPushHistory();
   const t=edScrollX+(edW-ED_PIANO_W)/(edPxS*2);
-  const m=69; // A4 default
+  const m=69;
   edNotes.push({m,start:+t.toFixed(3),dur:0.5,l:""});
-  edSelectNote(edNotes.length-1); // plays the note on select
+  edSelectNote(edNotes.length-1);
   edScrollX=Math.max(0,t-1);
 }
 
 function edDeleteSelected(){
   if(edSel<0)return;
+  edPushHistory();
   edNotes.splice(edSel,1);
   edSel=-1;
   document.getElementById("edFloatLyric").classList.remove("on");
@@ -1710,6 +1735,7 @@ function bindEditorEvents(){
   edCv.addEventListener("pointerup",edPointerUp);
   edCv.addEventListener("pointercancel",edPointerUp);
   edCv.addEventListener("wheel",edWheel,{passive:false});
+  edCv.addEventListener("dblclick",edDblClick);
   document.addEventListener("keydown",edKeyDown);
   // Bottom bar lyric input sync
   const inp=document.getElementById("edLyricInp");
@@ -1778,13 +1804,13 @@ function edPointerDown(e){
   if(hit){
     edSelectNote(hit.idx);
     const n=edNotes[hit.idx];
+    edPushHistory(); // save before drag mutates note
     edDrag={mode:hit.isResize?"resize":"move",idx:hit.idx,
             offT:edXTime(px)-n.start, offM:edYMidi(py)-n.m,
             startX:px,startY:py};
   }else{
-    // Click empty = deselect (or add on double-click via dblclick)
     edSel=-1; edSelectNote(-1);
-    // Create new note on empty area click
+    edPushHistory();
     const t=Math.max(0,edXTime(px));
     const m=Math.max(ED_MIN,Math.min(ED_MAX,edYMidi(py)));
     edNotes.push({m,start:+t.toFixed(3),dur:0.4,l:""});
@@ -1820,15 +1846,29 @@ function edPointerUp(){
   edDrag=null;
 }
 
+function edDblClick(e){
+  const r=edCv.getBoundingClientRect();
+  const px=e.clientX-r.left, py=e.clientY-r.top;
+  if(px<ED_PIANO_W)return;
+  const hit=edNoteAt(px,py);
+  if(!hit)return;
+  edSelectNote(hit.idx);
+  const floatInp=document.getElementById("edFloatLyric");
+  edPositionFloatLyric(edNotes[hit.idx],floatInp);
+  setTimeout(()=>{floatInp.focus();floatInp.select();},30);
+}
+
 // Keyboard shortcuts in editor
 function edKeyDown(e){
-  // Don't intercept when typing in lyric input
-  if(e.target===document.getElementById("edLyricInp"))return;
-  if(e.key==="Delete"||e.key==="Backspace"){
-    e.preventDefault();
-    edDeleteSelected();
-  }
-  if(e.key==="Escape"){edSel=-1;edSelectNote(-1);}
+  const inInput=e.target===document.getElementById("edLyricInp")||
+                e.target===document.getElementById("edFloatLyric");
+  // Undo / Redo (works even inside inputs)
+  if((e.ctrlKey||e.metaKey)&&e.key==="z"&&!e.shiftKey){e.preventDefault();edUndo();return;}
+  if((e.ctrlKey||e.metaKey)&&(e.key==="y"||(e.key==="z"&&e.shiftKey))){e.preventDefault();edRedo();return;}
+  // Don't intercept text editing keys when inside a lyric input
+  if(inInput)return;
+  if(e.key==="Delete"||e.key==="Backspace"){e.preventDefault();edDeleteSelected();}
+  if(e.key==="Escape"){edSel=-1;document.getElementById("edFloatLyric").classList.remove("on");edSelectNote(-1);}
 }
 
 function edWheel(e){
@@ -1966,6 +2006,8 @@ renderSongs();
       <span id="edZoomLabel">1×</span>
       <button onclick="edZoom(+1)">+</button>
     </div>
+    <button class="ed-tb-btn" id="edUndoBtn" onclick="edUndo()" title="Undo (Ctrl+Z)">↩ Undo</button>
+    <button class="ed-tb-btn" id="edRedoBtn" onclick="edRedo()" title="Redo (Ctrl+Y)">↪ Redo</button>
     <button class="ed-tb-btn" onclick="edPreview()">▶ Preview</button>
     <button class="ed-tb-btn gold" onclick="saveEditorChanges()">💾 Save</button>
   </div>
