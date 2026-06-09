@@ -11,7 +11,7 @@
 // Cache-bust: redirect to versioned URL so GitHub Pages CDN never serves stale content.
 // Update BUILD whenever pushing new changes.
 (function(){
-  var BUILD='build-20250609-1';
+  var BUILD='build-20250609-2';
   if(location.search.indexOf(BUILD)<0){
     location.replace(location.pathname+'?'+BUILD+(location.hash||''));
   }
@@ -736,6 +736,32 @@ function buildVoicePills(){
   $("voiceInfo").textContent="Range: "+selectedVoice.sub+" · "+((selectedVoice.max-selectedVoice.min)+1)+" semitones";
 }
 
+// Play a gentle pitch-reference cue so singers can tune before the game starts
+function playPitchCue(midi){
+  try{
+    const ac=new(window.AudioContext||window.webkitAudioContext)();
+    const t0=ac.currentTime+0.05;
+    // Play note once at full pitch
+    function makeNote(startT, dur, vol){
+      const osc=ac.createOscillator(), g=ac.createGain();
+      osc.type="sine"; // soft sine for a tuning-fork feel
+      osc.frequency.value=midiToFreq(midi);
+      const rel=0.08;
+      g.gain.setValueAtTime(0,startT);
+      g.gain.linearRampToValueAtTime(vol,startT+0.04);
+      g.gain.linearRampToValueAtTime(vol,startT+dur-rel);
+      g.gain.linearRampToValueAtTime(0,startT+dur);
+      osc.connect(g).connect(ac.destination);
+      osc.start(startT); osc.stop(startT+dur+0.05);
+    }
+    // Two gentle pulses: short at count "3", longer at count "1"
+    makeNote(t0,       0.5, 0.18); // count 3 — short ping
+    makeNote(t0+0.8,   0.5, 0.18); // count 2 — short ping
+    makeNote(t0+1.6,   0.9, 0.25); // count 1 — longer, louder, "this is the pitch"
+    setTimeout(()=>{try{ac.close();}catch(e){}},3500);
+  }catch(e){}
+}
+
 async function startGameWithSettings(){
   MIN_MIDI=selectedVoice.min;
   MAX_MIDI=selectedVoice.max;
@@ -769,7 +795,12 @@ function startGame(song){
     $("hScore").textContent="0";$("hStreak").textContent="0";$("hMult").textContent="1×";
     let n=3;$("cd").textContent=n;
     const countdownMs=3*800;
-    startBackingTrack(song, countdownMs/1000); // start audio in sync with countdown end
+    startBackingTrack(song, countdownMs/1000);
+    // Play the first note as a pitch reference during the 3-count
+    if(tl.events.length){
+      const firstMidi=tl.events[0].m;
+      playPitchCue(firstMidi);
+    }
     const iv=setInterval(()=>{
       n--;
       if(n<=0){clearInterval(iv);$("cd").textContent="";game.state="play";game.t0=performance.now();requestAnimationFrame(gameLoop);}
