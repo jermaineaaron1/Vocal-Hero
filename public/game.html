@@ -1,0 +1,1002 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vocal Hero — Game</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/umd/lucide.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+html, body { height: 100%; margin: 0; }
+* { box-sizing: border-box; }
+:root { --bg:#0a0a12; --surface:#14142a; --text:#e8e6f0; --primary:#7c3aed; --secondary:#22d3ee; }
+body { font-family:'Outfit',sans-serif; background:var(--bg); color:var(--text); }
+.orbitron { font-family:'Orbitron',monospace; }
+.piano-key { transition:background 0.1s; }
+.piano-key.white { background:linear-gradient(180deg,#f8f8f8,#e0e0e0); border:1px solid #999; }
+.piano-key.black { background:linear-gradient(180deg,#333,#111); border:1px solid #000; z-index:2; }
+.piano-key.active-white { background:linear-gradient(180deg,#c4b5fd,#8b5cf6)!important; }
+.piano-key.active-black { background:linear-gradient(180deg,#7c3aed,#5b21b6)!important; }
+.note-bar { position:absolute; background:linear-gradient(90deg,var(--primary),var(--secondary)); border-radius:4px; cursor:pointer; min-width:20px; display:flex; align-items:center; padding:0 4px; font-size:10px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.5); user-select:none; border:1px solid rgba(255,255,255,.2); }
+.note-bar:hover { filter:brightness(1.2); }
+.note-bar.selected { border:2px solid #facc15; box-shadow:0 0 8px rgba(250,204,21,.5); }
+::-webkit-scrollbar { width:8px; height:8px; }
+::-webkit-scrollbar-track { background:var(--bg); }
+::-webkit-scrollbar-thumb { background:var(--primary); border-radius:4px; }
+.game-note-bar { position:absolute; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.7); transition:opacity 0.15s; pointer-events:none; }
+.pitch-line { position:absolute; left:0; width:100%; height:3px; background:#facc15; border-radius:2px; box-shadow:0 0 10px rgba(250,204,21,.8); transition:top 0.05s linear; pointer-events:none; z-index:10; }
+.toast { position:fixed; top:20px; right:20px; z-index:9999; padding:12px 20px; border-radius:8px; background:var(--primary); color:#fff; font-weight:500; animation:slideIn 0.3s ease, fadeOut 0.3s ease 2.7s; pointer-events:none; }
+@keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+@keyframes fadeOut { from{opacity:1} to{opacity:0} }
+.confirm-overlay { position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:9998; display:flex; align-items:center; justify-content:center; }
+.confirm-box { background:var(--surface); border:1px solid rgba(124,58,237,.3); border-radius:12px; padding:24px; max-width:360px; width:90%; }
+.neon-glow { text-shadow:0 0 10px var(--primary),0 0 40px var(--primary); }
+.score-popup { position:absolute; font-family:'Orbitron',monospace; font-weight:700; pointer-events:none; animation:popUp 0.8s ease forwards; }
+@keyframes popUp { 0%{transform:translateY(0) scale(1);opacity:1} 100%{transform:translateY(-40px) scale(1.3);opacity:0} }
+.lyric-highlight { color:var(--secondary); text-shadow:0 0 8px rgba(34,211,238,.5); transition:all 0.2s; }
+.strike-zone { position:absolute; width:3px; top:0; bottom:0; background:var(--secondary); box-shadow:0 0 15px var(--secondary),0 0 30px var(--secondary); z-index:5; }
+.btn-primary { background:linear-gradient(135deg,var(--primary),#6d28d9); color:#fff; border:none; padding:10px 20px; border-radius:8px; font-weight:600; cursor:pointer; transition:all 0.2s; font-family:'Outfit',sans-serif; }
+.btn-primary:hover { filter:brightness(1.15); transform:translateY(-1px); }
+.btn-primary:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+.btn-secondary { background:rgba(124,58,237,.15); color:var(--text); border:1px solid rgba(124,58,237,.3); padding:8px 16px; border-radius:8px; font-weight:500; cursor:pointer; transition:all 0.2s; font-family:'Outfit',sans-serif; }
+.btn-secondary:hover { background:rgba(124,58,237,.25); }
+.input-field { background:rgba(255,255,255,.05); border:1px solid rgba(124,58,237,.3); color:var(--text); padding:8px 12px; border-radius:6px; width:100%; font-family:'Outfit',sans-serif; font-size:14px; }
+.input-field:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 2px rgba(124,58,237,.2); }
+.editor-grid { background-image:linear-gradient(rgba(124,58,237,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(124,58,237,.05) 1px,transparent 1px); }
+.tab-active { background:var(--primary); color:#fff; }
+.tab-inactive { background:rgba(124,58,237,.1); color:rgba(232,230,240,.6); }
+  </style>
+</head>
+<body class="h-full overflow-hidden">
+<div id="app" class="h-full flex flex-col w-full">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between px-5 py-3 border-b border-purple-900/30" style="background:linear-gradient(90deg,var(--bg),var(--surface));">
+    <h1 class="orbitron text-xl font-bold neon-glow" style="color:var(--secondary);">VOCAL HERO</h1>
+    <nav class="flex gap-2">
+      <button id="tab-home" class="tab-active px-4 py-2 rounded-lg text-sm font-semibold transition-all" onclick="switchView('home')">
+        <i data-lucide="home" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:4px;"></i>Songs
+      </button>
+      <button id="tab-editor" class="tab-inactive px-4 py-2 rounded-lg text-sm font-semibold transition-all" onclick="switchView('editor')">
+        <i data-lucide="music" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:4px;"></i>Editor
+      </button>
+      <button id="tab-play" class="tab-inactive px-4 py-2 rounded-lg text-sm font-semibold transition-all" style="display:none;" onclick="switchView('play')">
+        <i data-lucide="play" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:4px;"></i>Play
+      </button>
+    </nav>
+  </header>
+
+  <!-- HOME VIEW -->
+  <div id="view-home" class="flex-1 overflow-auto p-6">
+    <div class="max-w-3xl mx-auto">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="orbitron text-lg font-bold" style="color:var(--secondary);">Your Songs</h2>
+        <button class="btn-primary flex items-center gap-2" onclick="createNewSong()">
+          <i data-lucide="plus" style="width:16px;height:16px;"></i> New Song
+        </button>
+      </div>
+      <div id="song-list" class="space-y-3">
+        <div id="empty-state" class="text-center py-16 opacity-60">
+          <i data-lucide="mic" style="width:48px;height:48px;margin:0 auto 12px;display:block;color:var(--primary);"></i>
+          <p class="text-lg mb-2">Loading songs…</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDITOR VIEW -->
+  <div id="view-editor" class="flex-1 overflow-hidden flex flex-col" style="display:none;">
+    <div class="flex items-center gap-3 px-4 py-2 border-b border-purple-900/30" style="background:var(--surface);">
+      <input id="editor-song-name" class="input-field" style="max-width:200px;" placeholder="Song Name" value="Untitled Song">
+      <div class="flex items-center gap-1">
+        <span class="text-xs opacity-60">BPM:</span>
+        <input id="editor-bpm" type="number" class="input-field" style="width:70px;" value="120" min="40" max="240">
+      </div>
+      <div class="flex-1"></div>
+      <label for="midi-upload" class="btn-secondary flex items-center gap-2 text-sm cursor-pointer">
+        <i data-lucide="upload" style="width:14px;height:14px;"></i> Import MIDI
+      </label>
+      <input id="midi-upload" type="file" accept=".mid,.midi" class="hidden" onchange="handleMidiUpload(event)">
+      <button class="btn-secondary text-sm flex items-center gap-2" onclick="clearEditorNotes()">
+        <i data-lucide="trash-2" style="width:14px;height:14px;"></i> Clear
+      </button>
+      <button class="btn-primary text-sm flex items-center gap-2" id="save-song-btn" onclick="saveSong()">
+        <i data-lucide="save" style="width:14px;height:14px;"></i> Save
+      </button>
+    </div>
+    <div class="flex-1 flex overflow-hidden">
+      <div id="editor-piano" class="flex-shrink-0" style="width:60px;overflow-y:auto;background:var(--surface);"></div>
+      <div id="editor-grid-container" class="flex-1 overflow-auto relative editor-grid" style="background:var(--bg);">
+        <div id="editor-grid" class="relative" style="min-width:2000px;"></div>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 px-4 py-2 border-t border-purple-900/30" style="background:var(--surface);">
+      <span class="text-xs opacity-60 flex-shrink-0">Selected note lyric:</span>
+      <input id="lyric-input" class="input-field text-sm" style="max-width:200px;" placeholder="Type lyric…" oninput="updateSelectedNoteLyric(this.value)" disabled>
+      <span class="text-xs opacity-40 ml-2" id="note-info">Click grid to place notes · click note to select · right-click to delete · Space advances to next note</span>
+    </div>
+  </div>
+
+  <!-- PLAY VIEW -->
+  <div id="view-play" class="flex-1 overflow-hidden flex flex-col" style="display:none;">
+    <div class="flex items-center justify-between px-4 py-2 border-b border-purple-900/30" style="background:var(--surface);">
+      <div class="flex items-center gap-4">
+        <span id="play-song-name" class="orbitron text-sm font-bold" style="color:var(--secondary);"></span>
+        <span class="text-xs opacity-40">|</span>
+        <span class="text-xs opacity-60">Score:</span>
+        <span id="play-score" class="orbitron text-lg font-bold" style="color:var(--primary);">0</span>
+        <span id="yt-status" class="text-xs opacity-50"></span>
+      </div>
+      <div class="flex items-center gap-3">
+        <div id="mic-status" class="flex items-center gap-1 text-xs opacity-60">
+          <i data-lucide="mic-off" style="width:14px;height:14px;color:#ef4444;"></i> Mic off
+        </div>
+        <button id="play-start-btn" class="btn-primary text-sm" onclick="startGame()">
+          <i data-lucide="play" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:4px;"></i>Start
+        </button>
+        <button id="play-pause-btn" class="btn-secondary text-sm" style="display:none;" onclick="togglePause()">
+          <i data-lucide="pause" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:4px;"></i>Pause
+        </button>
+        <button class="btn-secondary text-sm" onclick="stopGame();switchView('home');">
+          <i data-lucide="x" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:4px;"></i>Exit
+        </button>
+      </div>
+    </div>
+    <!-- YouTube player (hidden, audio only) -->
+    <div id="yt-player-wrap" style="width:0;height:0;overflow:hidden;position:absolute;pointer-events:none;">
+      <div id="yt-player-el"></div>
+    </div>
+    <div class="flex-1 flex overflow-hidden">
+      <div id="play-piano" class="flex-shrink-0" style="width:60px;overflow-y:hidden;background:var(--surface);"></div>
+      <div id="game-area" class="flex-1 relative overflow-hidden" style="background:var(--bg);">
+        <div id="game-grid-lines" class="absolute inset-0 pointer-events-none"></div>
+        <div class="strike-zone" style="left:60px;"></div>
+        <div id="game-notes" class="absolute inset-0 pointer-events-none"></div>
+        <div id="pitch-line" class="pitch-line" style="display:none;"></div>
+        <div id="score-popups" class="absolute inset-0 pointer-events-none"></div>
+        <!-- Floating lyrics banner -->
+        <div id="lyrics-banner" style="display:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:20;text-align:center;pointer-events:none;min-width:280px;max-width:78%;background:rgba(10,10,18,0.88);border:1px solid rgba(124,58,237,0.55);border-radius:16px;padding:10px 28px 8px;backdrop-filter:blur(10px);box-shadow:0 0 24px rgba(124,58,237,0.25),0 2px 12px rgba(0,0,0,0.6);">
+          <div id="lyrics-current" class="orbitron" style="font-size:1.25rem;font-weight:700;color:#22d3ee;text-shadow:0 0 18px rgba(34,211,238,0.75);min-height:1.6rem;letter-spacing:0.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+          <div id="lyrics-next" style="font-size:0.8rem;font-weight:400;color:rgba(232,230,240,0.38);margin-top:3px;min-height:1.1rem;letter-spacing:0.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+        </div>
+      </div>
+    </div>
+    <div id="results-overlay" class="confirm-overlay" style="display:none;">
+      <div class="confirm-box text-center" style="max-width:400px;">
+        <h2 class="orbitron text-2xl font-bold mb-2 neon-glow" style="color:var(--secondary);">Song Complete!</h2>
+        <div class="my-6">
+          <p class="text-sm opacity-60 mb-1">Final Score</p>
+          <p id="final-score" class="orbitron text-5xl font-black" style="color:var(--primary);">0</p>
+          <p id="final-grade" class="orbitron text-2xl mt-2"></p>
+        </div>
+        <div class="flex gap-3 justify-center">
+          <button class="btn-secondary" onclick="document.getElementById('results-overlay').style.display='none';switchView('home');">Back to Songs</button>
+          <button class="btn-primary" onclick="document.getElementById('results-overlay').style.display='none';startGame();">Play Again</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm dialog -->
+<div id="confirm-dialog" class="confirm-overlay" style="display:none;">
+  <div class="confirm-box">
+    <p id="confirm-message" class="mb-4"></p>
+    <div class="flex gap-3 justify-end">
+      <button id="confirm-cancel" class="btn-secondary text-sm">Cancel</button>
+      <button id="confirm-ok" class="btn-primary text-sm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Constants ────────────────────────────────────────────────────────────────
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const OCTAVE_MIN = 2, OCTAVE_MAX = 6;
+const ROW_HEIGHT = 16;
+const MIDI_HI = 84; // C6
+
+let allNotes = [];
+for (let o = OCTAVE_MAX; o >= OCTAVE_MIN; o--) {
+  for (let i = NOTE_NAMES.length - 1; i >= 0; i--) {
+    allNotes.push(NOTE_NAMES[i] + o);
+  }
+}
+const TOTAL_ROWS = allNotes.length;
+
+// ── State ────────────────────────────────────────────────────────────────────
+let editorNotes = [];
+let selectedNoteId = null;
+let nextNoteId = 1;
+let currentSongId = null;
+let allSongs = [];
+let isDrawing = false, drawStartBeat = 0, drawNoteIndex = 0;
+
+// Game state
+let gameRunning = false, gamePaused = false, pausedAt = 0;
+let gameScore = 0, gameAnimFrame = null, gameStartTime = 0;
+let gameLoop = null; // stored ref so resumeGame can restart animation
+let gameSongNotes = [], gameBpm = 120;
+let gameTimeNotes = [];   // original time-based notes (seconds) for YT-synced game
+let gameYtUrl = null;
+let gameAudioUrl = null;  // direct MP3 URL (fallback when no yt_url)
+let audioContext = null, analyser = null, micStream = null, currentPitch = -1;
+
+// YouTube IFrame player
+let ytPlayer = null;
+let ytReady = false;
+let ytTimeOffset = 0; // seconds to wait before notes start (lead-in)
+
+// HTML5 audio player (for songs with audio_url but no yt_url)
+let audioEl = null;
+
+// Load YouTube IFrame API once
+(function loadYTAPI() {
+  if (document.querySelector('script[src*="youtube.com/iframe_api"]')) return;
+  window.onYouTubeIframeAPIReady = () => { ytReady = true; };
+  const s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(s);
+}());
+
+// ── Vercel API (same-origin) ──────────────────────────────────────────────────
+const API = '/api';
+
+function getBpmFromTags(tags) {
+  const m = (tags || '').match(/bpm:(\d+)/);
+  return m ? parseInt(m[1]) : 120;
+}
+
+/** Convert a Supabase vh_songs record → Canva-style song object */
+function vhToCanva(s) {
+  const bpm = getBpmFromTags(s.tags);
+  const spb = 60 / bpm;
+  // Beat-based notes for the editor grid
+  const notes = (s.notes || []).map((n, i) => ({
+    id: i + 1,
+    noteIndex: Math.max(0, Math.min(TOTAL_ROWS - 1, MIDI_HI - n.midi)),
+    startBeat: Math.round(n.start / spb * 4) / 4,
+    duration: Math.max(0.25, Math.round((n.end - n.start) / spb * 4) / 4),
+    lyric: n.lyric || ''
+  }));
+  // Time-based notes kept for game sync with YouTube
+  const timeNotes = (s.notes || []).map(n => ({
+    noteIndex: Math.max(0, Math.min(TOTAL_ROWS - 1, MIDI_HI - n.midi)),
+    start: n.start,
+    end: n.end,
+    lyric: n.lyric || ''
+  }));
+  return {
+    __id: s.id,
+    song_name: s.title || 'Untitled',
+    bpm,
+    notes,
+    timeNotes,
+    yt_url:    s.yt_url    || null,
+    audio_url: s.audio_url || null,
+    artist: s.artist || '',
+    status: s.status || 'draft'
+  };
+}
+
+/** Convert Canva-style song object → Supabase payload */
+function canvaToVH(song) {
+  const bpm = song.bpm || 120;
+  const spb = 60 / bpm;
+  const notes = (song.notes || []).map(n => ({
+    id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2,10),
+    part: 0,
+    midi: Math.max(36, Math.min(84, MIDI_HI - n.noteIndex)),
+    start: Math.round(n.startBeat * spb * 100) / 100,
+    end: Math.round((n.startBeat + n.duration) * spb * 100) / 100,
+    lyric: n.lyric || '',
+    velocity: 80
+  }));
+  return {
+    title: song.song_name || 'Untitled',
+    artist: song.artist || '',
+    tags: `bpm:${bpm}`,
+    notes,
+    status: 'ready'
+  };
+}
+
+async function apiLoadSongs() {
+  try {
+    const r = await fetch(`${API}/songs`);
+    if (!r.ok) throw new Error(await r.text());
+    const raw = await r.json();
+    allSongs = Array.isArray(raw) ? raw.map(vhToCanva) : [];
+    renderSongList(allSongs);
+  } catch (e) {
+    showToast('Failed to load songs: ' + e.message);
+    document.getElementById('empty-state').querySelector('p').textContent = 'Could not connect to server.';
+  }
+}
+
+async function apiCreateSong(song) {
+  const r = await fetch(`${API}/songs`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(canvaToVH(song))
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return vhToCanva(await r.json());
+}
+
+async function apiUpdateSong(id, song) {
+  const r = await fetch(`${API}/songs?id=${id}`, {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(canvaToVH(song))
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return vhToCanva(await r.json());
+}
+
+async function apiDeleteSong(id) {
+  const r = await fetch(`${API}/songs?id=${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+function showConfirm(msg, onOk) {
+  const d = document.getElementById('confirm-dialog');
+  document.getElementById('confirm-message').textContent = msg;
+  d.style.display = 'flex';
+  const ok = document.getElementById('confirm-ok');
+  const cancel = document.getElementById('confirm-cancel');
+  const close = () => { d.style.display = 'none'; ok.onclick = null; cancel.onclick = null; };
+  ok.onclick = () => { close(); onOk(); };
+  cancel.onclick = close;
+}
+
+function midiToNoteIndex(midi) {
+  const oct = Math.floor(midi / 12) - 1;
+  const name = NOTE_NAMES[midi % 12] + oct;
+  const idx = allNotes.indexOf(name);
+  return idx >= 0 ? idx : -1;
+}
+
+function freqToNoteIndex(freq) {
+  if (freq <= 0) return -1;
+  const midi = Math.round(12 * Math.log2(freq / 440) + 69);
+  return midiToNoteIndex(midi);
+}
+
+// ── View switching ─────────────────────────────────────────────────────────
+function switchView(v) {
+  ['home','editor','play'].forEach(name => {
+    const el = document.getElementById('view-' + name);
+    if (el) el.style.display = name === v ? (name === 'home' ? 'block' : 'flex') : 'none';
+    const tab = document.getElementById('tab-' + name);
+    if (tab) tab.className = tab.className.replace(/tab-\w+/, name === v ? 'tab-active' : 'tab-inactive');
+  });
+  if (v === 'editor') renderEditorPiano();
+  if (v === 'play') renderPlayPiano();
+  if (v !== 'play') stopGame();
+}
+
+// ── Song list ─────────────────────────────────────────────────────────────
+function renderSongList(songs) {
+  const list = document.getElementById('song-list');
+  const empty = document.getElementById('empty-state');
+  list.querySelectorAll('.song-card').forEach(el => el.remove());
+  if (!songs.length) { empty.style.display = 'block'; empty.querySelector('p').textContent = 'No songs yet'; return; }
+  empty.style.display = 'none';
+  songs.forEach(song => {
+    const el = document.createElement('div');
+    el.className = 'song-card flex items-center justify-between p-4 rounded-lg border border-purple-900/20 transition-all hover:border-purple-600/40';
+    el.style.background = 'var(--surface)';
+    el.dataset.id = song.__id;
+    el.innerHTML = `
+      <div>
+        <p class="font-semibold">${escHtml(song.song_name)}</p>
+        <p class="text-xs opacity-50 mt-1">${song.notes.length} notes · ${song.bpm} BPM${song.artist ? ' · ' + escHtml(song.artist) : ''}</p>
+      </div>
+      <div class="flex gap-2 flex-wrap justify-end">
+        <button class="btn-primary text-xs py-2 px-3" onclick="playSong('${song.__id}')">
+          <i data-lucide="play" style="width:12px;height:12px;display:inline;vertical-align:middle;margin-right:3px;"></i>Play
+        </button>
+        <button class="btn-secondary text-xs py-2 px-3" onclick="window.open('/vocal-hero/library/${song.__id}/edit','_blank')">
+          <i data-lucide="external-link" style="width:12px;height:12px;display:inline;vertical-align:middle;margin-right:3px;"></i>Edit
+        </button>
+        <button class="btn-secondary text-xs py-2 px-3" style="color:#ef4444;border-color:rgba(239,68,68,.3);" onclick="deleteSong('${song.__id}')">
+          <i data-lucide="trash-2" style="width:12px;height:12px;display:inline;vertical-align:middle;"></i>
+        </button>
+      </div>`;
+    list.appendChild(el);
+  });
+  lucide.createIcons();
+}
+
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function createNewSong() {
+  currentSongId = null; editorNotes = []; nextNoteId = 1; selectedNoteId = null;
+  document.getElementById('editor-song-name').value = 'Untitled Song';
+  document.getElementById('editor-bpm').value = '120';
+  document.getElementById('lyric-input').value = '';
+  document.getElementById('lyric-input').disabled = true;
+  switchView('editor'); renderEditorGrid();
+}
+
+function editSong(id) {
+  const song = allSongs.find(s => s.__id === id);
+  if (!song) return;
+  currentSongId = id; editorNotes = song.notes.map(n => ({...n}));
+  nextNoteId = editorNotes.reduce((m, n) => Math.max(m, n.id + 1), 1);
+  selectedNoteId = null;
+  document.getElementById('editor-song-name').value = song.song_name;
+  document.getElementById('editor-bpm').value = song.bpm;
+  document.getElementById('lyric-input').value = '';
+  document.getElementById('lyric-input').disabled = true;
+  switchView('editor'); renderEditorGrid();
+}
+
+function deleteSong(id) {
+  const song = allSongs.find(s => s.__id === id);
+  if (!song) return;
+  showConfirm(`Delete "${song.song_name}"?`, async () => {
+    try { await apiDeleteSong(id); allSongs = allSongs.filter(s => s.__id !== id); renderSongList(allSongs); showToast('Deleted'); }
+    catch(e) { showToast('Delete failed: ' + e.message); }
+  });
+}
+
+async function saveSong() {
+  const btn = document.getElementById('save-song-btn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const song = {
+    song_name: document.getElementById('editor-song-name').value || 'Untitled Song',
+    bpm: parseInt(document.getElementById('editor-bpm').value) || 120,
+    notes: editorNotes
+  };
+  try {
+    if (currentSongId) {
+      const updated = await apiUpdateSong(currentSongId, song);
+      const idx = allSongs.findIndex(s => s.__id === currentSongId);
+      if (idx >= 0) allSongs[idx] = updated;
+    } else {
+      const created = await apiCreateSong(song);
+      currentSongId = created.__id;
+      allSongs.unshift(created);
+    }
+    showToast('Saved!');
+  } catch(e) {
+    showToast('Save failed: ' + e.message);
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<i data-lucide="save" style="width:14px;height:14px;"></i> Save';
+  lucide.createIcons();
+}
+
+function playSong(id) {
+  const song = allSongs.find(s => s.__id === id);
+  if (!song) return;
+  gameSongNotes = song.notes;
+  gameTimeNotes = song.timeNotes || [];
+  gameBpm = song.bpm;
+  gameYtUrl   = song.yt_url    || null;
+  gameAudioUrl = song.audio_url || null;
+  document.getElementById('play-song-name').textContent = song.song_name;
+  const ytStatus = document.getElementById('yt-status');
+  if (gameYtUrl) {
+    ytStatus.textContent = '🎵 YouTube audio ready';
+    ytStatus.style.color = '#22d3ee';
+  } else if (gameAudioUrl) {
+    ytStatus.textContent = '🎵 Audio track ready';
+    ytStatus.style.color = '#22d3ee';
+  } else {
+    ytStatus.textContent = '⚠ No audio — notes only';
+    ytStatus.style.color = '#f97316';
+  }
+  document.getElementById('tab-play').style.display = '';
+  // Pre-load audio
+  if (gameYtUrl) loadYtPlayer(gameYtUrl);
+  else if (gameAudioUrl) loadAudioEl(gameAudioUrl);
+  switchView('play');
+}
+
+function extractVideoId(url) {
+  return (url || '').match(/(?:v=|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/)?.[1] ?? null;
+}
+
+function loadYtPlayer(url) {
+  const vid = extractVideoId(url);
+  if (!vid) return;
+  // Destroy old player
+  if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
+  const el = document.getElementById('yt-player-el');
+  el.innerHTML = '';
+  const div = document.createElement('div');
+  div.id = 'yt-inner'; el.appendChild(div);
+  const tryCreate = () => {
+    ytPlayer = new window.YT.Player('yt-inner', {
+      height: '1', width: '1',
+      videoId: vid,
+      playerVars: { playsinline: 1, controls: 0, rel: 0, modestbranding: 1 },
+      events: {
+        onReady: () => { /* player ready, startGame will call playVideo */ },
+        onStateChange: e => {
+          if (e.data === window.YT.PlayerState.ENDED) endGame();
+        }
+      }
+    });
+  };
+  if (ytReady && window.YT?.Player) tryCreate();
+  else { window.onYouTubeIframeAPIReady = () => { ytReady = true; tryCreate(); }; }
+}
+
+function loadAudioEl(url) {
+  if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+  audioEl = new Audio(url);
+  audioEl.preload = 'auto';
+  audioEl.crossOrigin = 'anonymous';
+  audioEl.addEventListener('ended', () => { if (gameRunning) endGame(); });
+}
+
+// ── Editor piano ─────────────────────────────────────────────────────────────
+function renderEditorPiano() {
+  const c = document.getElementById('editor-piano'); c.innerHTML = '';
+  allNotes.forEach(name => {
+    const isBlack = name.includes('#');
+    const key = document.createElement('div');
+    key.className = `piano-key ${isBlack?'black':'white'} flex items-center justify-end pr-1`;
+    key.style.cssText = `height:${ROW_HEIGHT}px;font-size:8px;color:${isBlack?'#aaa':'#555'};border-bottom:1px solid rgba(124,58,237,.1);`;
+    key.textContent = name;
+    c.appendChild(key);
+  });
+  renderEditorGrid();
+}
+
+// ── Editor grid ──────────────────────────────────────────────────────────────
+function renderEditorGrid() {
+  const grid = document.getElementById('editor-grid');
+  const bpm = parseInt(document.getElementById('editor-bpm').value) || 120;
+  const totalMeasures = 32, beatsPerMeasure = 4, beatWidth = 40;
+  const totalBeats = totalMeasures * beatsPerMeasure;
+  grid.style.width = (totalBeats * beatWidth) + 'px';
+  grid.style.height = (TOTAL_ROWS * ROW_HEIGHT) + 'px';
+  grid.innerHTML = '';
+
+  // Measure / beat lines
+  for (let m = 0; m <= totalMeasures; m++) {
+    const line = document.createElement('div');
+    line.style.cssText = `position:absolute;left:${m*beatsPerMeasure*beatWidth}px;top:0;bottom:0;width:1px;background:rgba(124,58,237,${m%4===0?.2:.1});pointer-events:none;`;
+    grid.appendChild(line);
+    if (m % 4 === 0) {
+      const lbl = document.createElement('div');
+      lbl.style.cssText = `position:absolute;left:${m*beatsPerMeasure*beatWidth+2}px;top:2px;font-size:9px;color:rgba(124,58,237,.4);pointer-events:none;`;
+      lbl.textContent = m/4+1; grid.appendChild(lbl);
+    }
+  }
+  for (let b = 0; b < totalBeats; b++) {
+    if (b % beatsPerMeasure !== 0) {
+      const line = document.createElement('div');
+      line.style.cssText = `position:absolute;left:${b*beatWidth}px;top:0;bottom:0;width:1px;background:rgba(124,58,237,.04);pointer-events:none;`;
+      grid.appendChild(line);
+    }
+  }
+  for (let r = 0; r < TOTAL_ROWS; r++) {
+    const isC = /^C\d+$/.test(allNotes[r]);
+    const line = document.createElement('div');
+    line.style.cssText = `position:absolute;left:0;right:0;top:${r*ROW_HEIGHT}px;height:1px;background:rgba(124,58,237,${isC?.15:.04});pointer-events:none;`;
+    grid.appendChild(line);
+  }
+
+  // Notes
+  editorNotes.forEach(note => {
+    const bar = document.createElement('div');
+    bar.className = 'note-bar' + (note.id === selectedNoteId ? ' selected' : '');
+    bar.style.cssText = `top:${note.noteIndex*ROW_HEIGHT+1}px;left:${note.startBeat*beatWidth}px;width:${note.duration*beatWidth-2}px;height:${ROW_HEIGHT-2}px;`;
+    bar.textContent = note.lyric || '';
+    bar.dataset.noteId = note.id;
+    bar.addEventListener('click', e => { e.stopPropagation(); selectEditorNote(note.id); });
+    bar.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); removeEditorNote(note.id); });
+    grid.appendChild(bar);
+  });
+
+  // Draw interaction
+  grid.onmousedown = e => {
+    if (e.target !== grid) return;
+    if (e.button !== 0) return;
+    const rect = grid.getBoundingClientRect();
+    const x = e.clientX - rect.left + grid.parentElement.scrollLeft;
+    const y = e.clientY - rect.top + grid.parentElement.scrollTop;
+    const noteIndex = Math.floor(y / ROW_HEIGHT);
+    const beat = Math.floor(x / beatWidth);
+    if (noteIndex < 0 || noteIndex >= TOTAL_ROWS || beat < 0) return;
+    if (editorNotes.some(n => n.noteIndex === noteIndex && beat >= n.startBeat && beat < n.startBeat + n.duration)) return;
+    isDrawing = true; drawStartBeat = beat; drawNoteIndex = noteIndex;
+  };
+  grid.onmouseup = e => {
+    if (!isDrawing) return; isDrawing = false;
+    const rect = grid.getBoundingClientRect();
+    const x = e.clientX - rect.left + grid.parentElement.scrollLeft;
+    let endBeat = Math.floor(x / beatWidth) + 1;
+    if (endBeat <= drawStartBeat) endBeat = drawStartBeat + 1;
+    const note = { id: nextNoteId++, noteIndex: drawNoteIndex, startBeat: drawStartBeat, duration: Math.min(endBeat - drawStartBeat, 16), lyric: '' };
+    editorNotes.push(note); selectEditorNote(note.id); renderEditorGrid();
+  };
+}
+
+function selectEditorNote(id) {
+  selectedNoteId = id;
+  const note = editorNotes.find(n => n.id === id);
+  const input = document.getElementById('lyric-input');
+  if (note) {
+    input.disabled = false; input.value = note.lyric || ''; input.focus();
+    document.getElementById('note-info').textContent = `Note: ${allNotes[note.noteIndex]} · Beat ${note.startBeat} · Dur: ${note.duration} · Right-click = delete · Space = next note`;
+  }
+  document.querySelectorAll('.note-bar').forEach(el => el.classList.toggle('selected', parseInt(el.dataset.noteId) === id));
+}
+
+function updateSelectedNoteLyric(val) {
+  const note = editorNotes.find(n => n.id === selectedNoteId);
+  if (!note) return;
+  note.lyric = val;
+  const bar = document.querySelector(`.note-bar[data-note-id="${note.id}"]`);
+  if (bar) bar.textContent = val;
+}
+
+// Space/Tab → advance to next note in lyric input
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('lyric-input').addEventListener('keydown', e => {
+    if (e.key === ' ' || e.key === 'Tab') {
+      e.preventDefault();
+      const sorted = [...editorNotes].sort((a,b) => a.startBeat - b.startBeat || a.noteIndex - b.noteIndex);
+      const idx = sorted.findIndex(n => n.id === selectedNoteId);
+      if (idx >= 0 && idx < sorted.length - 1) selectEditorNote(sorted[idx+1].id);
+    }
+    if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur();
+  });
+});
+
+function removeEditorNote(id) {
+  editorNotes = editorNotes.filter(n => n.id !== id);
+  if (selectedNoteId === id) {
+    selectedNoteId = null;
+    document.getElementById('lyric-input').value = '';
+    document.getElementById('lyric-input').disabled = true;
+    document.getElementById('note-info').textContent = 'Click grid to place notes · click note to select · right-click to delete · Space advances to next note';
+  }
+  renderEditorGrid();
+}
+
+function clearEditorNotes() {
+  if (!editorNotes.length) return;
+  showConfirm('Clear all notes?', () => {
+    editorNotes = []; selectedNoteId = null;
+    document.getElementById('lyric-input').value = '';
+    document.getElementById('lyric-input').disabled = true;
+    renderEditorGrid();
+  });
+}
+
+// ── MIDI import ───────────────────────────────────────────────────────────────
+function handleMidiUpload(event) {
+  const file = event.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const parsed = parseMidi(new Uint8Array(e.target.result));
+      if (!parsed.length) { showToast('No notes found in MIDI file'); return; }
+      editorNotes = parsed; nextNoteId = editorNotes.reduce((m,n)=>Math.max(m,n.id+1),1);
+      renderEditorGrid(); showToast(`Imported ${parsed.length} notes`);
+    } catch(err) { showToast('Error parsing MIDI: ' + err.message); }
+  };
+  reader.readAsArrayBuffer(file);
+  event.target.value = '';
+}
+
+function parseMidi(data) {
+  let pos = 0;
+  const u16 = () => (data[pos++]<<8)|data[pos++];
+  const u32 = () => (data[pos++]<<24)|(data[pos++]<<16)|(data[pos++]<<8)|data[pos++];
+  const vl  = () => { let v=0; while(true){const b=data[pos++];v=(v<<7)|(b&0x7F);if(!(b&0x80))break;} return v; };
+  if (String.fromCharCode(data[0],data[1],data[2],data[3]) !== 'MThd') throw new Error('Not a MIDI file');
+  pos=4; u32(); u16(); const nTracks=u16(), ppqn=u16();
+  const bpm = parseInt(document.getElementById('editor-bpm').value)||120;
+  const evts = [];
+  for (let t=0; t<nTracks; t++) {
+    if (pos>=data.length) break;
+    if (String.fromCharCode(data[pos],data[pos+1],data[pos+2],data[pos+3])!=='MTrk'){pos+=8;continue;}
+    pos+=4; const end=pos+u32(); let tick=0, rs=0; const active={};
+    while (pos<end) {
+      tick+=vl();
+      let st=data[pos]; if(st<0x80){st=rs;}else{pos++;if(st>=0x80&&st<0xF0)rs=st;}
+      const cmd=st&0xF0;
+      if (cmd===0x90){const n=data[pos++],v=data[pos++];if(v>0){active[n]=tick;}else if(active[n]!=null){evts.push({midi:n,s:active[n],e:tick});delete active[n];}}
+      else if(cmd===0x80){const n=data[pos++];pos++;if(active[n]!=null){evts.push({midi:n,s:active[n],e:tick});delete active[n];}}
+      else if(cmd===0xC0||cmd===0xD0){pos++;}
+      else if(st===0xFF){pos++;const l=vl();pos+=l;}
+      else if(cmd===0xF0){const l=vl();pos+=l;}
+      else{pos+=2;}
+    }
+    pos=end;
+  }
+  let id=1;
+  return evts.filter(e=>midiToNoteIndex(e.midi)>=0).map(e=>({
+    id:id++,
+    noteIndex:midiToNoteIndex(e.midi),
+    startBeat:Math.round(e.s/ppqn*4)/4,
+    duration:Math.max(0.25,Math.round((e.e-e.s)/ppqn*4)/4),
+    lyric:''
+  })).slice(0,500);
+}
+
+// ── Play mode piano ───────────────────────────────────────────────────────────
+function renderPlayPiano() {
+  const c = document.getElementById('play-piano'); c.innerHTML = '';
+  allNotes.forEach((name,i) => {
+    const isBlack = name.includes('#');
+    const key = document.createElement('div');
+    key.className = `piano-key ${isBlack?'black':'white'} flex items-center justify-end pr-1`;
+    key.style.cssText = `height:${ROW_HEIGHT}px;font-size:8px;color:${isBlack?'#aaa':'#555'};border-bottom:1px solid rgba(124,58,237,.1);`;
+    key.id = 'play-key-'+i; key.textContent = name; c.appendChild(key);
+  });
+  const gl = document.getElementById('game-grid-lines'); gl.innerHTML = '';
+  for (let r=0;r<TOTAL_ROWS;r++) {
+    const isC = /^C\d+$/.test(allNotes[r]);
+    const l=document.createElement('div');
+    l.style.cssText=`position:absolute;left:0;right:0;top:${r*ROW_HEIGHT}px;height:1px;background:rgba(124,58,237,${isC?.12:.03});`;
+    gl.appendChild(l);
+  }
+}
+
+// ── Pitch detection ─────────────────────────────────────────────────────────
+async function initMic() {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({audio:true});
+    audioContext = new AudioContext();
+    const src = audioContext.createMediaStreamSource(micStream);
+    analyser = audioContext.createAnalyser(); analyser.fftSize = 4096;
+    src.connect(analyser);
+    document.getElementById('mic-status').innerHTML = '<i data-lucide="mic" style="width:14px;height:14px;color:#22c55e;"></i> Mic on';
+    lucide.createIcons(); return true;
+  } catch { document.getElementById('mic-status').innerHTML = '<i data-lucide="mic-off" style="width:14px;height:14px;color:#ef4444;"></i> Mic denied'; lucide.createIcons(); return false; }
+}
+
+function detectPitch() {
+  if (!analyser) return -1;
+  const buf = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buf);
+  let rms=0; for(let i=0;i<buf.length;i++) rms+=buf[i]*buf[i]; rms=Math.sqrt(rms/buf.length);
+  if (rms<0.01) return -1;
+  const sr=audioContext.sampleRate, SIZE=buf.length, half=Math.floor(SIZE/2);
+  const minP=Math.floor(sr/1200), maxP=Math.floor(sr/60);
+  let best=-1, bestC=0;
+  for (let o=minP; o<Math.min(maxP,half); o++) {
+    let c=0; for(let i=0;i<half;i++) c+=Math.abs(buf[i]-buf[i+o]);
+    c=1-(c/half); if(c>bestC){bestC=c;best=o;}
+  }
+  if (bestC<0.8||best===-1) return -1;
+  return freqToNoteIndex(sr/best);
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────────
+const SCROLL_SPEED = 200; // px per second
+const STRIKE_X = 60;
+const LEAD_IN = 3; // seconds of lead-in before notes (and before YouTube starts)
+
+async function startGame() {
+  // Use time-based notes if available (YouTube songs), else fall back to beat-based
+  const useTimeBased = gameTimeNotes.length > 0;
+  const sourceNotes = useTimeBased ? gameTimeNotes : gameSongNotes.map(n => ({
+    noteIndex: n.noteIndex,
+    start: n.startBeat * (60 / gameBpm),
+    end: (n.startBeat + n.duration) * (60 / gameBpm),
+    lyric: n.lyric || ''
+  }));
+
+  if (!sourceNotes.length) { showToast('No notes in this song!'); return; }
+
+  const micOk = await initMic();
+  if (!micOk) showToast('Playing without mic — no pitch detection');
+
+  gameScore = 0; gamePaused = false;
+  document.getElementById('play-score').textContent = '0';
+  document.getElementById('results-overlay').style.display = 'none';
+  document.getElementById('game-notes').innerHTML = '';
+  document.getElementById('score-popups').innerHTML = '';
+  document.getElementById('lyrics-banner').style.display = 'none';
+  document.getElementById('lyrics-current').textContent = '';
+  document.getElementById('lyrics-next').textContent = '';
+  document.getElementById('play-pause-btn').style.display = '';
+  document.getElementById('play-pause-btn').innerHTML = '<i data-lucide="pause" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:4px;"></i>Pause';
+  lucide.createIcons();
+
+  const sorted = [...sourceNotes].sort((a, b) => a.start - b.start);
+
+  // Build DOM elements for each note
+  const noteEls = sorted.map(note => {
+    const widthPx = Math.max(20, (note.end - note.start) * SCROLL_SPEED - 2);
+    const el = document.createElement('div');
+    el.className = 'game-note-bar';
+    el.style.cssText = `height:${ROW_HEIGHT-2}px;top:${note.noteIndex*ROW_HEIGHT+1}px;width:${widthPx}px;background:linear-gradient(90deg,var(--primary),var(--secondary));border:1px solid rgba(255,255,255,.2);`;
+    el.textContent = note.lyric || '';
+    document.getElementById('game-notes').appendChild(el);
+    return { el, note, scored: false };
+  });
+
+  const lyrics = sorted.filter(n => n.lyric).map(n => ({ t: n.start, dur: n.end - n.start, lyric: n.lyric }));
+
+  // Start YouTube if available — with LEAD_IN seconds head start
+  gameRunning = true;
+  gameStartTime = performance.now() / 1000; // wall clock start
+
+  ytTimeOffset = LEAD_IN;
+  if (ytPlayer && gameYtUrl) {
+    setTimeout(() => {
+      if (gameRunning) {
+        try { ytPlayer.seekTo(0, true); ytPlayer.playVideo(); } catch {}
+      }
+    }, LEAD_IN * 1000);
+    document.getElementById('yt-status').textContent = `🎵 Music starts in ${LEAD_IN}s…`;
+  } else if (audioEl && gameAudioUrl) {
+    audioEl.currentTime = 0;
+    setTimeout(() => {
+      if (gameRunning) audioEl.play().catch(() => {});
+    }, LEAD_IN * 1000);
+    document.getElementById('yt-status').textContent = `🎵 Music starts in ${LEAD_IN}s…`;
+  }
+
+  function getNow() {
+    if (ytPlayer && gameYtUrl) {
+      try {
+        const state = ytPlayer.getPlayerState();
+        if (state === 1 || state === 2) return ytPlayer.getCurrentTime();
+      } catch {}
+    }
+    if (audioEl && gameAudioUrl && !audioEl.paused) {
+      return audioEl.currentTime;
+    }
+    // Fallback: wall clock minus lead-in
+    const wall = performance.now() / 1000 - gameStartTime;
+    return Math.max(0, wall - ytTimeOffset);
+  }
+
+  function loop() {
+    if (!gameRunning) return;
+    const now = getNow();
+    const wallNow = performance.now() / 1000 - gameStartTime;
+
+    const pitch = detectPitch();
+    const pl = document.getElementById('pitch-line');
+    if (pitch >= 0 && pitch < TOTAL_ROWS) {
+      pl.style.display = 'block';
+      pl.style.top = (pitch * ROW_HEIGHT + ROW_HEIGHT / 2 - 1) + 'px';
+    } else {
+      pl.style.display = 'none';
+    }
+
+    // Highlight piano keys
+    document.querySelectorAll('#play-piano .piano-key').forEach((k, i) => {
+      const isBlack = allNotes[i].includes('#');
+      k.className = `piano-key ${isBlack?'black':'white'} flex items-center justify-end pr-1` +
+        (i === pitch ? ` ${isBlack?'active-black':'active-white'}` : '');
+    });
+
+    // Update note positions — notes approach from the right, hit strike zone at their start time
+    let allDone = true;
+    noteEls.forEach(ne => {
+      const nx = STRIKE_X + (ne.note.start - now) * SCROLL_SPEED;
+      ne.el.style.left = nx + 'px';
+      const nw = parseFloat(ne.el.style.width);
+      if (ne.note.end + 1 > now) allDone = false;
+
+      // Scoring window: note is at strike zone
+      if (!ne.scored && nx <= STRIKE_X + 20 && nx + nw >= STRIKE_X - 20 && pitch >= 0) {
+        const diff = Math.abs(pitch - ne.note.noteIndex);
+        if (diff === 0) {
+          ne.scored = true; gameScore += 100;
+          ne.el.style.background = 'linear-gradient(90deg,#22c55e,#4ade80)';
+          spawnPop(STRIKE_X, ne.note.noteIndex * ROW_HEIGHT, '+100', '#22c55e');
+        } else if (diff <= 2) {
+          ne.scored = true; gameScore += 50;
+          ne.el.style.background = 'linear-gradient(90deg,#eab308,#facc15)';
+          spawnPop(STRIKE_X, ne.note.noteIndex * ROW_HEIGHT, '+50', '#eab308');
+        }
+      }
+      // Missed
+      if (!ne.scored && nx + nw < STRIKE_X - 30) { ne.scored = true; ne.el.style.opacity = '.3'; }
+    });
+
+    document.getElementById('play-score').textContent = gameScore;
+
+    // Lyrics banner
+    const currentLyric = lyrics.find(l => l.t <= now && l.t + l.dur >= now);
+    const nextLyric = lyrics.find(l => l.t > now);
+    document.getElementById('lyrics-current').textContent = currentLyric ? currentLyric.lyric : '';
+    document.getElementById('lyrics-next').textContent = nextLyric ? nextLyric.lyric : '';
+    document.getElementById('lyrics-banner').style.display = (currentLyric || nextLyric) ? '' : 'none';
+
+    if (gameYtUrl && ytPlayer) {
+      document.getElementById('yt-status').textContent = `🎵 ${fmtTime(now)}`;
+    }
+
+    if (allDone) { endGame(); return; }
+    gameAnimFrame = requestAnimationFrame(loop);
+  }
+
+  gameLoop = loop;
+  gameAnimFrame = requestAnimationFrame(loop);
+}
+
+function togglePause() {
+  if (gamePaused) resumeGame(); else pauseGame();
+}
+
+function pauseGame() {
+  if (!gameRunning || gamePaused) return;
+  gamePaused = true;
+  gameRunning = false;
+  pausedAt = performance.now() / 1000;
+  if (ytPlayer && gameYtUrl) { try { ytPlayer.pauseVideo(); } catch {} }
+  if (audioEl && gameAudioUrl) audioEl.pause();
+  const btn = document.getElementById('play-pause-btn');
+  btn.innerHTML = '<i data-lucide="play" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:4px;"></i>Resume';
+  lucide.createIcons();
+}
+
+function resumeGame() {
+  if (!gamePaused) return;
+  const pauseDuration = performance.now() / 1000 - pausedAt;
+  gameStartTime += pauseDuration; // shift wall-clock reference to exclude paused time
+  gamePaused = false;
+  gameRunning = true;
+  if (ytPlayer && gameYtUrl) { try { ytPlayer.playVideo(); } catch {} }
+  if (audioEl && gameAudioUrl) audioEl.play().catch(()=>{});
+  const btn = document.getElementById('play-pause-btn');
+  btn.innerHTML = '<i data-lucide="pause" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:4px;"></i>Pause';
+  lucide.createIcons();
+  if (gameLoop) gameAnimFrame = requestAnimationFrame(gameLoop);
+}
+
+function fmtTime(s) { return `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
+
+function spawnPop(x,y,text,color) {
+  const el=document.createElement('div'); el.className='score-popup';
+  el.style.cssText=`left:${x}px;top:${y}px;color:${color};font-size:16px;`;
+  el.textContent=text; document.getElementById('score-popups').appendChild(el);
+  setTimeout(()=>el.remove(),800);
+}
+
+function endGame() {
+  gameRunning=false; gamePaused=false;
+  document.getElementById('play-pause-btn').style.display='none';
+  document.getElementById('lyrics-banner').style.display='none';
+  const pct=gameSongNotes.length>0?gameScore/(gameSongNotes.length*100)*100:0;
+  let grade='F',gColor='#ef4444';
+  if(pct>=95){grade='S';gColor='#facc15';}else if(pct>=85){grade='A';gColor='#22c55e';}
+  else if(pct>=70){grade='B';gColor='#3b82f6';}else if(pct>=50){grade='C';gColor='#f97316';}
+  else if(pct>=30){grade='D';gColor='#ef4444';}
+  document.getElementById('final-score').textContent=gameScore;
+  const ge=document.getElementById('final-grade'); ge.textContent=grade; ge.style.color=gColor;
+  document.getElementById('results-overlay').style.display='flex';
+}
+
+function stopGame() {
+  gameRunning = false; gamePaused = false;
+  document.getElementById('play-pause-btn').style.display='none';
+  document.getElementById('lyrics-banner').style.display='none';
+  if (gameAnimFrame) cancelAnimationFrame(gameAnimFrame);
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (audioContext) { audioContext.close().catch(() => {}); audioContext = null; analyser = null; }
+  if (ytPlayer) { try { ytPlayer.pauseVideo(); } catch {} }
+  if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
+  document.getElementById('pitch-line').style.display = 'none';
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+lucide.createIcons();
+apiLoadSongs();
+</script>
+</body>
+</html>

@@ -11,3 +11,29 @@ desktop.ini
 
 # Logs / temp
 *.log
+
+# Dependencies
+/node_modules/
+
+# Next.js
+/.next/
+/out/
+next-env.d.ts
+
+# Production build
+/build
+
+# Vercel
+/.vercel/
+
+# TypeScript
+*.tsbuildinfo
+
+# Local env files (never commit secrets)
+.env
+.env*.local
+
+# Python pipeline — its own independent git repo (separate history, no
+# remote configured), not a submodule of this repo. Excluded here so it
+# doesn't get tracked as a broken gitlink.
+/python-pipeline/
