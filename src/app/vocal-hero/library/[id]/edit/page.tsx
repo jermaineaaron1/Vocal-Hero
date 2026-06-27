@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import type { Song, SongNote, SatbPart, TimedLyricSection } from '@/lib/vocal-hero/types';
+import { harmonizeSatb, notesToCurve } from '@/lib/vocal-hero/harmonize';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const KEY_W   = 100;  // piano strip width  (CSS px)
@@ -257,6 +258,49 @@ export default function SongEditorPage() {
   // MP3 background track
   const mp3Ref = useRef<HTMLAudioElement|null>(null);
 
+  // Persist auto-generated harmony immediately so it's already in the DB —
+  // not just local editor state — for the practice game to read.
+  async function autoSaveHarmony(harmonizedNotes: SongNote[]) {
+    const parts: SatbPart[] = [0,1,2,3].map(pi => ({
+      name: PARTS[pi] as SatbPart['name'],
+      rangeMin: PART_HZ[pi].min,
+      rangeMax: PART_HZ[pi].max,
+      curve: notesToCurve(harmonizedNotes, pi, durR.current, MIDI_LO, MIDI_HI),
+      aiGen: true,
+      edits: 0,
+    }));
+    try {
+      const res = await fetch(`/api/songs?id=${songId}`, {
+        method: 'PATCH', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ notes: harmonizedNotes, parts, status: 'ready' }),
+      });
+      if (res.ok) {
+        setSong(await res.json());
+        toast_('✨ Harmony auto-generated — Alto/Tenor/Bass ready to edit');
+      }
+    } catch { /* non-fatal — harmonized notes are already in local editor state */ }
+  }
+
+  // Re-run harmonization from the current melody, replacing only Alto/Tenor/
+  // Bass notes (part 1-3) — melody (part 0) and any still-unassigned notes
+  // are left untouched. Warns before overwriting hand-edited harmony parts.
+  // Does NOT auto-save — the user commits via the existing Save button.
+  function handleRegenerateHarmony() {
+    const melodyNotes = notes.filter(n=>n.part===0);
+    if (!melodyNotes.length) { toast_('No melody (part 0) notes to harmonize from'); return; }
+    const handEdited = song?.parts?.slice(1).some(p=>p.aiGen===false);
+    if (handEdited && !window.confirm('Alto/Tenor/Bass contain manual edits. Regenerating harmony will overwrite them. Continue?')) {
+      return;
+    }
+    pushUndo(notesR.current);
+    const { notes: harmonized } = harmonizeSatb(melodyNotes);
+    const newHarmony = harmonized.filter(n=>n.part!==0);
+    const untouched = notes.filter(n=>n.part!==1 && n.part!==2 && n.part!==3);
+    setNotes([...untouched, ...newHarmony]);
+    setSelId(null);
+    toast_('Harmony regenerated — click Save & Publish to commit');
+  }
+
   function handleMidiImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]; if (!file) return;
     const reader = new FileReader();
@@ -264,7 +308,19 @@ export default function SongEditorPage() {
       try {
         const parsed = parseMidiBytes(new Uint8Array(ev.target!.result as ArrayBuffer));
         if (!parsed.length) { toast_('No notes found in MIDI file'); return; }
-        const doImport = () => { pushUndo(notesR.current); setNotes(parsed); setSelId(null); toast_(`✓ Imported ${parsed.length} notes from MIDI`); };
+        const doImport = () => {
+          pushUndo(notesR.current);
+          setSelId(null);
+          if (parsed.every(n=>n.part===-1)) {
+            const { notes: harmonized } = harmonizeSatb(parsed);
+            setNotes(harmonized);
+            toast_(`✓ Imported ${parsed.length} notes — harmony auto-generated`);
+            autoSaveHarmony(harmonized);
+          } else {
+            setNotes(parsed);
+            toast_(`✓ Imported ${parsed.length} notes from MIDI`);
+          }
+        };
         if (notesR.current.length > 0) {
           if (window.confirm(`Replace the ${notesR.current.length} existing notes with ${parsed.length} notes from this MIDI file?`)) doImport();
         } else {
@@ -308,7 +364,14 @@ export default function SongEditorPage() {
       setDur(dur); durR.current=dur;
 
       if (s.notes && s.notes.length>0) {
-        setNotes(s.notes);
+        if (s.notes.every(n=>n.part===-1)) {
+          // Fresh extraction/import with no harmony yet — auto-generate it.
+          const { notes: harmonized } = harmonizeSatb(s.notes);
+          setNotes(harmonized);
+          autoSaveHarmony(harmonized);
+        } else {
+          setNotes(s.notes);
+        }
       } else if (s.timed_lyrics?.length) {
         const conv: SongNote[] = [];
         s.timed_lyrics.forEach(sec=>{
@@ -1041,18 +1104,29 @@ export default function SongEditorPage() {
       });
       tl.sort((a,b)=>a.start-b.start);
 
-      const parts: SatbPart[]=[0,1,2,3].map(pi=>{
-        const pn=sorted.filter(n=>n.part===pi);
-        const curve=Array.from({length:24},(_,k)=>{
-          const t=(k/23)*Math.max(duration,1);
-          const hit=pn.find(n=>t>=n.start&&t<n.end);
-          if(hit)return(hit.midi-MIDI_LO)/(MIDI_HI-MIDI_LO);
-          const prev=[...pn].reverse().find(n=>n.end<=t);
-          const next=pn.find(n=>n.start>t);
-          if(prev&&next){const sp=next.start-prev.end;const a=sp>0?(t-prev.end)/sp:0;return((prev.midi-MIDI_LO)/(MIDI_HI-MIDI_LO))*(1-a)+((next.midi-MIDI_LO)/(MIDI_HI-MIDI_LO))*a;}
-          return prev?(prev.midi-MIDI_LO)/(MIDI_HI-MIDI_LO):next?(next.midi-MIDI_LO)/(MIDI_HI-MIDI_LO):0.5;
+      // A part's aiGen should only flip to false (and its edits count bump)
+      // if that part's notes actually changed since load — otherwise an
+      // unrelated save (e.g. just fixing the title) would silently stomp
+      // "this harmony part is still AI-suggested" on every part, every time.
+      const notesChangedForPart = (pi: number) => {
+        const prev=(song.notes??[]).filter(n=>n.part===pi).sort((a,b)=>a.start-b.start);
+        const curr=sorted.filter(n=>n.part===pi);
+        if (prev.length!==curr.length) return true;
+        return prev.some((p,i)=>{
+          const c=curr[i];
+          return p.midi!==c.midi || p.start!==c.start || p.end!==c.end || p.lyric!==c.lyric;
         });
-        return {name:PARTS[pi] as SatbPart['name'],rangeMin:PART_HZ[pi].min,rangeMax:PART_HZ[pi].max,curve,aiGen:false,edits:(song.parts?.[pi]?.edits??0)+1};
+      };
+
+      const parts: SatbPart[]=[0,1,2,3].map(pi=>{
+        const curve=notesToCurve(sorted,pi,duration,MIDI_LO,MIDI_HI);
+        const prevPart=song.parts?.[pi];
+        const changed=notesChangedForPart(pi);
+        return {
+          name:PARTS[pi] as SatbPart['name'],rangeMin:PART_HZ[pi].min,rangeMax:PART_HZ[pi].max,curve,
+          aiGen:changed?false:(prevPart?.aiGen??false),
+          edits:changed?(prevPart?.edits??0)+1:(prevPart?.edits??0),
+        };
       });
 
       const res=await fetch(`/api/songs?id=${songId}`,{
@@ -1097,8 +1171,16 @@ export default function SongEditorPage() {
             setAnalyzing(false); return;
           }
           if(s.notes&&s.notes.length>0){
-            clearInterval(poll); setNotes(s.notes);
-            toast_(`✓ ${s.notes.length} notes detected — piano roll updated`);
+            clearInterval(poll);
+            if (s.notes.every(n=>n.part===-1)) {
+              const { notes: harmonized } = harmonizeSatb(s.notes);
+              setNotes(harmonized);
+              toast_(`✓ ${s.notes.length} notes detected — harmony auto-generated`);
+              autoSaveHarmony(harmonized);
+            } else {
+              setNotes(s.notes);
+              toast_(`✓ ${s.notes.length} notes detected — piano roll updated`);
+            }
             setAnalyzing(false);
           } else if(tries>90){
             clearInterval(poll); toast_('Timed out — pipeline may still be running');
@@ -1150,6 +1232,11 @@ export default function SongEditorPage() {
           {analyzing
             ? <><span className="animate-spin inline-block w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full"/>Detecting…</>
             : '🎤 Detect Vocals'}
+        </button>
+        <button onClick={handleRegenerateHarmony} disabled={!notes.some(n=>n.part===0)}
+          title="Regenerate Alto/Tenor/Bass from the current melody (part 0). Melody notes are left untouched."
+          className="text-xs bg-[#1a1a2e] hover:bg-[#22223a] disabled:opacity-40 border border-purple-900/40 text-[#fb923c] px-3 py-1.5 rounded flex items-center gap-1 transition-colors">
+          🎼 Regenerate Harmony
         </button>
         <button onClick={handleSave} disabled={saving}
           className="disabled:opacity-50 text-white text-xs font-bold px-4 py-1.5 rounded transition-colors" style={{background:'linear-gradient(135deg,#7c3aed,#6d28d9)'}}>
