@@ -7,12 +7,13 @@
 // for the chart. Comparing a recording against the chart and giving
 // feedback is a later phase — this is pure capture.
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { deriveChordChart } from '@/lib/vocal-hero/chords';
 import { MidiEngine, MidiRecorder, Metronome, type MidiDeviceInfo } from '@/lib/vocal-hero/midiEngine';
 import { PitchEngine } from '@/lib/vocal-hero/pitchEngine';
 import { PitchNoteSegmenter, OnsetSegmenter } from '@/lib/vocal-hero/micRecorder';
-import type { SongNote } from '@/lib/vocal-hero/types';
+import { analyzePitchedRecording, analyzePercussionRecording, summarize, type FeedbackMetrics } from '@/lib/vocal-hero/feedback';
+import type { Recording, SongNote } from '@/lib/vocal-hero/types';
 
 interface Props {
   songId: string;
@@ -35,6 +36,30 @@ export default function ArrangementView({ songId, notes, bpm, timeSig, duration 
   // Free-text groove cue per bar-group — manually entered, not auto-detected,
   // and session-local for this phase (not yet saved to the song record).
   const [grooveTags, setGrooveTags] = useState<Record<number, string>>({});
+
+  // ── My Recordings + rule-based feedback (Phase 3d) ────────────────────────
+  const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [analyzed, setAnalyzed] = useState<Record<string, FeedbackMetrics>>({});
+
+  async function reloadRecordings() {
+    try {
+      const res = await fetch(`/api/recordings?songId=${songId}`);
+      if (res.ok) setRecordings(await res.json());
+    } catch { /* non-fatal — list just stays as-is */ }
+  }
+
+  useEffect(() => { reloadRecordings(); }, [songId]);
+
+  function handleAnalyze(rec: Recording) {
+    const metrics = rec.source === 'mic-percussion'
+      ? analyzePercussionRecording(rec.notes, bpm, timeSig, duration)
+      : analyzePitchedRecording(rec.notes, events, bpm, timeSig);
+    setAnalyzed(a => ({ ...a, [rec.id]: metrics }));
+  }
+
+  const SOURCE_LABEL: Record<Recording['source'], string> = {
+    midi: '🎹 MIDI', 'mic-pitch': '🎤 Mic (pitched)', 'mic-percussion': '🎤 Mic (percussion)',
+  };
 
   // ── MIDI recording (Phase 3b) ─────────────────────────────────────────────
   const midiSupported = MidiEngine.isSupported;
@@ -97,7 +122,7 @@ export default function ArrangementView({ songId, notes, bpm, timeSig, duration 
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ songId, partIndex: -1, source: 'midi', notes: captured }),
       });
-      if (res.ok) setRecMsg(`✓ Saved (${captured.length} notes).`);
+      if (res.ok) { setRecMsg(`✓ Saved (${captured.length} notes).`); reloadRecordings(); }
       else { const er = await res.json().catch(() => ({})); setRecMsg('Save failed: ' + (er.error ?? res.statusText)); }
     } catch (err) {
       setRecMsg('Save failed: ' + String(err));
@@ -170,7 +195,7 @@ export default function ArrangementView({ songId, notes, bpm, timeSig, duration 
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ songId, partIndex: -1, source: micMode === 'pitch' ? 'mic-pitch' : 'mic-percussion', notes: captured }),
       });
-      if (res.ok) setMicMsg(`✓ Saved (${captured.length} notes).`);
+      if (res.ok) { setMicMsg(`✓ Saved (${captured.length} notes).`); reloadRecordings(); }
       else { const er = await res.json().catch(() => ({})); setMicMsg('Save failed: ' + (er.error ?? res.statusText)); }
     } catch (err) {
       setMicMsg('Save failed: ' + String(err));
@@ -264,6 +289,47 @@ export default function ArrangementView({ songId, notes, bpm, timeSig, duration 
           )}
           {micMsg && <span className="text-xs text-gray-500">{micMsg}</span>}
         </div>
+      </div>
+
+      {/* ── My Recordings + rule-based feedback ── */}
+      <div className="mb-3 bg-[#14142a] border border-purple-900/30 rounded p-3">
+        <div className="text-xs text-gray-500 font-bold mb-2">📊 My Recordings</div>
+        {!recordings.length ? (
+          <div className="text-xs text-gray-600">No recordings saved yet — record a take above to see it here.</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {recordings.map(rec => {
+              const metrics = analyzed[rec.id];
+              return (
+                <div key={rec.id} className="border border-purple-900/20 rounded p-2">
+                  <div className="flex items-center gap-2 flex-wrap text-xs">
+                    <span className="text-gray-300">{SOURCE_LABEL[rec.source]}</span>
+                    <span className="text-gray-600">{new Date(rec.created_at).toLocaleString()}</span>
+                    <span className="text-gray-600">{rec.notes.length} notes</span>
+                    <button onClick={() => handleAnalyze(rec)}
+                      className="text-xs bg-[#1a1a2e] hover:bg-[#22223a] border border-purple-900/40 text-[#22d3ee] px-2 py-0.5 rounded transition-colors">
+                      Analyze
+                    </button>
+                  </div>
+                  {metrics && (
+                    <div className="mt-2 text-xs text-gray-400">
+                      <div className="flex gap-4 flex-wrap mb-1">
+                        {metrics.chordToneAccuracy !== undefined && (
+                          <span>Chord-tone accuracy: <strong className="text-gray-200">{Math.round(metrics.chordToneAccuracy * 100)}%</strong></span>
+                        )}
+                        <span>Timing deviation: <strong className="text-gray-200">{Math.round(metrics.onsetMeanAbsDeviationMs)}ms</strong></span>
+                        <span>Bars covered: <strong className="text-gray-200">{metrics.barsCovered}/{metrics.totalBars}</strong></span>
+                      </div>
+                      <ul className="list-disc list-inside">
+                        {summarize(metrics).map((s, i) => <li key={i}>{s}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {!hasHarmony ? (

@@ -42,6 +42,13 @@ function chordSymbol(root: number, quality: ChordQuality): string {
   return NOTE_NAMES[((root % 12) + 12) % 12] + QUALITY_SUFFIX[quality];
 }
 
+/** Pitch classes (0-11) belonging to a chord of the given root/quality. */
+export function chordToneSet(root: number, quality: ChordQuality): Set<number> {
+  const tpl = CHORD_TEMPLATES.find(t => t.quality === quality);
+  const intervals = tpl ? tpl.intervals : [0, 4, 7];
+  return new Set(intervals.map(iv => ((root + iv) % 12 + 12) % 12));
+}
+
 /** Pitch class with the most sounding duration among `notes` within [start,end). */
 function dominantPitchClass(notes: SongNote[], start: number, end: number): number | null {
   const weights = new Array(12).fill(0);
