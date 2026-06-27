@@ -1,0 +1,10 @@
+fastapi==0.111.0
+uvicorn==0.29.0
+yt-dlp
+librosa>=0.10.2
+numpy==1.26.4
+supabase==2.4.6
+python-multipart==0.0.9
+httpx==0.27.0
+soundfile==0.12.1
+basic-pitch

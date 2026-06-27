@@ -33,7 +33,11 @@ next-env.d.ts
 .env
 .env*.local
 
-# Python pipeline — its own independent git repo (separate history, no
-# remote configured), not a submodule of this repo. Excluded here so it
-# doesn't get tracked as a broken gitlink.
-/python-pipeline/
+# Python pipeline secrets — already covered by the broader .env rule
+# above, called out explicitly since this folder has its own .env.
+python-pipeline/.env
+python-pipeline/.git
+
+# Local-only backup of python-pipeline's old git history (contains a
+# secret in an old commit) — never commit this.
+/python-pipeline-old-git-history-backup/
