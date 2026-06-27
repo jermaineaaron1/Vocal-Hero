@@ -10,6 +10,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { deriveChordChart } from '@/lib/vocal-hero/chords';
 import { MidiEngine, MidiRecorder, Metronome, type MidiDeviceInfo } from '@/lib/vocal-hero/midiEngine';
+import { PitchEngine } from '@/lib/vocal-hero/pitchEngine';
+import { PitchNoteSegmenter, OnsetSegmenter } from '@/lib/vocal-hero/micRecorder';
 import type { SongNote } from '@/lib/vocal-hero/types';
 
 interface Props {
@@ -104,6 +106,79 @@ export default function ArrangementView({ songId, notes, bpm, timeSig, duration 
     }
   }
 
+  // ── Mic recording (Phase 3c) ───────────────────────────────────────────────
+  const [micMode, setMicMode] = useState<'pitch' | 'percussion'>('pitch');
+  const [micRecording, setMicRecording] = useState(false);
+  const [micLastCount, setMicLastCount] = useState<number | null>(null);
+  const [micSaving, setMicSaving] = useState(false);
+  const [micMsg, setMicMsg] = useState('');
+
+  const pitchEngineRef = useRef<PitchEngine | null>(null);
+  const pitchSegmenterRef = useRef<PitchNoteSegmenter | null>(null);
+  const onsetSegmenterRef = useRef<OnsetSegmenter | null>(null);
+  const micMetronomeRef = useRef<Metronome | null>(null);
+
+  async function handleMicRecordToggle() {
+    if (!micRecording) {
+      setMicMsg('');
+      if (micMode === 'pitch') pitchSegmenterRef.current = new PitchNoteSegmenter();
+      else onsetSegmenterRef.current = new OnsetSegmenter();
+
+      // Wide enough to cover bass (open E ~41Hz) through guitar — wider than
+      // PitchEngine's vocalist-tuned default, passed per-instance here only.
+      const engine = new PitchEngine({
+        minHz: 38, maxHz: 1200,
+        onPitch: sample => {
+          if (micMode === 'pitch') {
+            pitchSegmenterRef.current?.handleSample(sample);
+          } else {
+            onsetSegmenterRef.current?.handleSample(sample);
+          }
+        },
+      });
+      try {
+        await engine.start();
+      } catch {
+        setMicMsg('Could not access the microphone — check browser permissions.');
+        return;
+      }
+      pitchEngineRef.current = engine;
+      micMetronomeRef.current = new Metronome();
+      micMetronomeRef.current.start(bpm, timeSig);
+      setMicLastCount(null);
+      setMicRecording(true);
+    } else {
+      pitchEngineRef.current?.stop();
+      pitchEngineRef.current = null;
+      micMetronomeRef.current?.stop();
+      micMetronomeRef.current = null;
+      const segmenter = micMode === 'pitch' ? pitchSegmenterRef.current : onsetSegmenterRef.current;
+      segmenter?.finish();
+      const captured = segmenter?.getNotes() ?? [];
+      setMicLastCount(captured.length);
+      setMicRecording(false);
+    }
+  }
+
+  async function handleSaveMicRecording() {
+    const segmenter = micMode === 'pitch' ? pitchSegmenterRef.current : onsetSegmenterRef.current;
+    const captured = segmenter?.getNotes() ?? [];
+    if (!captured.length) { setMicMsg('Nothing captured yet — record a take first.'); return; }
+    setMicSaving(true);
+    try {
+      const res = await fetch('/api/recordings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ songId, partIndex: -1, source: micMode === 'pitch' ? 'mic-pitch' : 'mic-percussion', notes: captured }),
+      });
+      if (res.ok) setMicMsg(`✓ Saved (${captured.length} notes).`);
+      else { const er = await res.json().catch(() => ({})); setMicMsg('Save failed: ' + (er.error ?? res.statusText)); }
+    } catch (err) {
+      setMicMsg('Save failed: ' + String(err));
+    } finally {
+      setMicSaving(false);
+    }
+  }
+
   function lyricForBar(start: number, end: number): string {
     return notes
       .filter(n => n.part === 0 && n.lyric && n.start < end && n.end > start)
@@ -162,6 +237,33 @@ export default function ArrangementView({ songId, notes, bpm, timeSig, duration 
             {recMsg && <span className="text-xs text-gray-500">{recMsg}</span>}
           </div>
         )}
+      </div>
+
+      {/* ── Mic recording panel (guitar/bass/cajon) ── */}
+      <div className="mb-3 bg-[#14142a] border border-purple-900/30 rounded p-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-gray-500 font-bold">🎤 Mic:</span>
+          <select value={micMode} onChange={e => setMicMode(e.target.value as 'pitch' | 'percussion')}
+            disabled={micRecording}
+            className="bg-[#1a1a2e] border border-purple-900/30 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none disabled:opacity-50">
+            <option value="pitch">Pitched (Guitar/Bass)</option>
+            <option value="percussion">Percussion (Cajon)</option>
+          </select>
+          <button onClick={handleMicRecordToggle}
+            className={`text-xs px-3 py-1 rounded font-bold transition-colors ${micRecording ? 'bg-red-900/60 border border-red-500 text-red-200' : 'bg-[#1a1a2e] border border-purple-900/40 text-[#22d3ee] hover:bg-[#22223a]'}`}>
+            {micRecording ? '■ Stop' : '● Record'}
+          </button>
+          {micLastCount !== null && !micRecording && (
+            <>
+              <span className="text-xs text-gray-400">{micLastCount} notes captured</span>
+              <button onClick={handleSaveMicRecording} disabled={micSaving}
+                className="text-xs bg-purple-900 hover:bg-purple-800 disabled:opacity-40 text-purple-200 px-3 py-1 rounded transition-colors">
+                {micSaving ? 'Saving…' : 'Save Recording'}
+              </button>
+            </>
+          )}
+          {micMsg && <span className="text-xs text-gray-500">{micMsg}</span>}
+        </div>
       </div>
 
       {!hasHarmony ? (

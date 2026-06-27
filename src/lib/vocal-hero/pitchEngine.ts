@@ -96,7 +96,11 @@ export class PitchEngine {
 
     this.analyser.getFloatTimeDomainData(this.buffer);
 
-    const { hz, confidence } = this.autocorrelate(this.buffer, this.context.sampleRate);
+    let rms = 0;
+    for (let i = 0; i < this.buffer.length; i++) rms += this.buffer[i] * this.buffer[i];
+    rms = Math.sqrt(rms / this.buffer.length);
+
+    const { hz, confidence } = this.autocorrelate(this.buffer, this.context.sampleRate, rms);
 
     // Exponential smoothing — only smooth non-zero pitches
     if (hz > 0 && confidence >= this.opts.confidenceThreshold) {
@@ -114,6 +118,7 @@ export class PitchEngine {
       frequency:  this.smoothedHz,
       timestamp:  this.context.currentTime - this.startTime,
       confidence: hz > 0 ? confidence : 0,
+      amplitude:  rms,
     });
 
     this.animFrame = requestAnimationFrame(this.loop);
@@ -128,7 +133,8 @@ export class PitchEngine {
 
   private autocorrelate(
     buf: Float32Array<ArrayBuffer>,
-    sampleRate: number
+    sampleRate: number,
+    rms: number
   ): { hz: number; confidence: number } {
 
     const SIZE = buf.length;
@@ -139,9 +145,6 @@ export class PitchEngine {
     const maxLag = Math.ceil(sampleRate / minHz);
 
     // RMS gate — reject silence
-    let rms = 0;
-    for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
-    rms = Math.sqrt(rms / SIZE);
     if (rms < 0.01) return { hz: 0, confidence: 0 };
 
     // Compute normalized autocorrelation for each lag

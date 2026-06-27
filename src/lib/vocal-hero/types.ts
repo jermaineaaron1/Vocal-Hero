@@ -92,6 +92,7 @@ export interface PitchSample {
   frequency: number;  // Hz, 0 = silence
   timestamp: number;  // seconds
   confidence: number; // 0–1
+  amplitude: number;  // RMS of the analysis buffer, ~0-1 — used for percussion onset detection
 }
 
 export interface ScoreBatch {
@@ -105,7 +106,7 @@ export interface Recording {
   id: string;
   song_id: string;
   part_index: number;   // -1 = unassigned/whole-melody capture
-  source: 'midi' | 'mic';
+  source: 'midi' | 'mic-pitch' | 'mic-percussion';
   notes: SongNote[];
   created_at: string;
 }
