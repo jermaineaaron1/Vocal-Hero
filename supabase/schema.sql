@@ -97,6 +97,11 @@ $$;
 -- read/written by application code; declared here to match reality.
 alter table vh_songs add column if not exists notes jsonb default '[]'::jsonb;
 
+-- Tempo data (Phase 3a) — previously local-only editor UI state that reset
+-- on every reload; now persisted so the chord chart can lay out real bars.
+alter table vh_songs add column if not exists bpm int default 120;
+alter table vh_songs add column if not exists time_sig int default 4;
+
 -- Enable Realtime
 alter publication supabase_realtime add table vh_session_players;
 alter publication supabase_realtime add table vh_score_events;

@@ -45,6 +45,8 @@ export interface Song {
   pipeline_log: string;
   yt_url: string;
   audio_url?: string;     // direct audio URL for gameplay (MP3 in Supabase Storage)
+  bpm?: number;           // beats per minute
+  time_sig?: number;      // beats per bar (numerator only — 2, 3, 4, or 6)
   created_at: string;
 }
 

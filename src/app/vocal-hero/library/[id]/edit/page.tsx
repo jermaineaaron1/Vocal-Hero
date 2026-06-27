@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useRouter, useParams } from 'next/navigation';
 import type { Song, SongNote, SatbPart, TimedLyricSection } from '@/lib/vocal-hero/types';
 import { harmonizeSatb, notesToCurve } from '@/lib/vocal-hero/harmonize';
+import ArrangementView from './ArrangementView';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const KEY_W   = 100;  // piano strip width  (CSS px)
@@ -181,6 +182,9 @@ export default function SongEditorPage() {
   const [artist,   setArtist]  = useState('');
   const [ytUrl,    setYtUrl]   = useState('');
   const [duration, setDur]     = useState(180);
+
+  // View: Piano Roll (note editing) vs Arrangement (chord-chart reading aid)
+  const [view, setView] = useState<'pianoroll'|'arrangement'>('pianoroll');
 
   // Piano roll
   const [notes,    setNotes]   = useState<SongNote[]>([]);
@@ -362,6 +366,10 @@ export default function SongEditorPage() {
       setYtUrl(url); ytUrlR.current=url;
       const dur = s.duration??180;
       setDur(dur); durR.current=dur;
+      const loadedBpm = s.bpm ?? 120;
+      setBpm(loadedBpm); bpmR.current = loadedBpm;
+      const loadedTimeSig = s.time_sig ?? 4;
+      setTimeSig(loadedTimeSig); timeSigR.current = loadedTimeSig;
 
       if (s.notes && s.notes.length>0) {
         if (s.notes.every(n=>n.part===-1)) {
@@ -1131,7 +1139,7 @@ export default function SongEditorPage() {
 
       const res=await fetch(`/api/songs?id=${songId}`,{
         method:'PATCH',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({title,artist,yt_url:ytUrl,duration,timed_lyrics:tl,parts,notes:sorted,status:'ready'}),
+        body:JSON.stringify({title,artist,yt_url:ytUrl,duration,timed_lyrics:tl,parts,notes:sorted,status:'ready',bpm,time_sig:timeSig}),
       });
       if(res.ok){setSong(await res.json());toast_('Saved & published!');}
       else {const er=await res.json();toast_('Error: '+(er.error??'save failed'));}
@@ -1218,6 +1226,16 @@ export default function SongEditorPage() {
           className="hidden sm:block bg-[#1a1a2e] border border-purple-900/30 rounded px-2 py-1 text-xs w-36 focus:outline-none focus:border-[#7c3aed]"/>
         <input value={artist} onChange={e=>setArtist(e.target.value)} placeholder="Artist"
           className="hidden sm:block bg-[#1a1a2e] border border-purple-900/30 rounded px-2 py-1 text-xs w-28 focus:outline-none focus:border-[#7c3aed]"/>
+        <div className="flex items-center gap-0.5 bg-[#1a1a2e] border border-purple-900/30 rounded p-0.5 ml-1">
+          <button onClick={()=>setView('pianoroll')}
+            className={`text-xs px-2.5 py-1 rounded transition-colors ${view==='pianoroll'?'bg-purple-900/60 border border-purple-500 text-purple-200':'text-gray-500 hover:text-gray-300'}`}>
+            Piano Roll
+          </button>
+          <button onClick={()=>setView('arrangement')}
+            className={`text-xs px-2.5 py-1 rounded transition-colors ${view==='arrangement'?'bg-purple-900/60 border border-purple-500 text-purple-200':'text-gray-500 hover:text-gray-300'}`}>
+            Arrangement
+          </button>
+        </div>
         <div className="flex-1"/>
         {/* Hidden MIDI file input */}
         <input ref={midiInputRef} type="file" accept=".mid,.midi,audio/midi,audio/x-midi"
@@ -1358,7 +1376,7 @@ export default function SongEditorPage() {
       </div>
 
       {/* ── PIANO ROLL ── */}
-      {(()=>{
+      {view==='pianoroll' && (()=>{
         const maxNoteEnd = notes.reduce((m,n)=>Math.max(m,n.end),0);
         const maxScrX = Math.max(duration, maxNoteEnd+10, 120);
         const maxScrY = (MIDI_HI-MIDI_LO+3)*NOTE_H;
@@ -1401,6 +1419,11 @@ export default function SongEditorPage() {
           </div>
         );
       })()}
+
+      {/* ── ARRANGEMENT (chord chart) ── */}
+      {view==='arrangement' && (
+        <ArrangementView notes={notes} bpm={bpm} timeSig={timeSig} duration={duration}/>
+      )}
 
       {/* ── BOTTOM PANEL ── */}
       <div className="flex-none bg-[#14142a] border-t border-purple-900/30 px-3 py-2 flex items-center gap-2 flex-wrap min-h-[48px]">
