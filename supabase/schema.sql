@@ -102,6 +102,17 @@ alter table vh_songs add column if not exists notes jsonb default '[]'::jsonb;
 alter table vh_songs add column if not exists bpm int default 120;
 alter table vh_songs add column if not exists time_sig int default 4;
 
+-- Vocal Hero: recorded instrumentalist takes (Phase 3b) — pure capture, no
+-- comparison/feedback yet (that's a later phase). One row per take.
+create table if not exists vh_recordings (
+  id uuid primary key default gen_random_uuid(),
+  song_id uuid references vh_songs(id) on delete cascade,
+  part_index int default -1,
+  source text default 'midi',
+  notes jsonb default '[]'::jsonb,
+  created_at timestamptz default now()
+);
+
 -- Enable Realtime
 alter publication supabase_realtime add table vh_session_players;
 alter publication supabase_realtime add table vh_score_events;

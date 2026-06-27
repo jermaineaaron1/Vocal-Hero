@@ -100,3 +100,12 @@ export interface ScoreBatch {
   deltas: number[];
   timestamp: number;
 }
+
+export interface Recording {
+  id: string;
+  song_id: string;
+  part_index: number;   // -1 = unassigned/whole-melody capture
+  source: 'midi' | 'mic';
+  notes: SongNote[];
+  created_at: string;
+}

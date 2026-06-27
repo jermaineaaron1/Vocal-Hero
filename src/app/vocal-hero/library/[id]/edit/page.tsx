@@ -1422,7 +1422,7 @@ export default function SongEditorPage() {
 
       {/* ── ARRANGEMENT (chord chart) ── */}
       {view==='arrangement' && (
-        <ArrangementView notes={notes} bpm={bpm} timeSig={timeSig} duration={duration}/>
+        <ArrangementView songId={songId} notes={notes} bpm={bpm} timeSig={timeSig} duration={duration}/>
       )}
 
       {/* ── BOTTOM PANEL ── */}
