@@ -4,15 +4,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import {
+  supabase,
   fetchSessionByCode,
   fetchSong,
   joinSession,
   subscribeToSession,
+  openNoteResultsChannel,
 } from '@/lib/vocal-hero/supabaseClient';
 import { PitchEngine } from '@/lib/vocal-hero/pitchEngine';
 import { ScoreEngine, CENT_TOLERANCE } from '@/lib/vocal-hero/scoreEngine';
 import { SatbLane } from '../SatbLane';
-import type { Song, GameSession, SessionPlayer, SatbPart, SongNote } from '@/lib/vocal-hero/types';
+import type { Song, GameSession, SessionPlayer, SatbPart } from '@/lib/vocal-hero/types';
 
 const PART_NAMES   = ['Soprano', 'Alto', 'Tenor', 'Bass'];
 const PART_COLOURS = ['#f472b6', '#fb923c', '#60a5fa', '#34d399'];
@@ -51,11 +53,12 @@ function PhonePageInner() {
 
   // Pitch / score state
   const [pitchHz,     setPitchHz]     = useState(0);
-  const [pitchNorm,   setPitchNorm]   = useState(0);
   const [targetNorm,  setTargetNorm]  = useState(0);
   const [localScore,  setLocalScore]  = useState(0);
   const [centsDiff,   setCentsDiff]   = useState(0);
   const [elapsed,     setElapsed]     = useState(0);
+  const [elapsedHiRes, setElapsedHiRes] = useState(0); // rAF-resolution, for smooth lane scrolling
+  const [noteResults, setNoteResults] = useState<Record<string, boolean>>({});
   const [micAllowed,  setMicAllowed]  = useState<boolean | null>(null);
 
   const pitchRef  = useRef<PitchEngine | null>(null);
@@ -63,6 +66,7 @@ function PhonePageInner() {
   const timerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const unsubRef  = useRef<(() => void) | null>(null);
+  const noteChannelRef = useRef<ReturnType<typeof openNoteResultsChannel> | null>(null);
 
   // ── Cleanup ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -72,6 +76,7 @@ function PhonePageInner() {
       if (timerRef.current) clearInterval(timerRef.current);
       if (pollRef.current)  clearInterval(pollRef.current);
       unsubRef.current?.();
+      if (noteChannelRef.current) supabase.removeChannel(noteChannelRef.current);
     };
   }, []);
 
@@ -141,7 +146,17 @@ function PhonePageInner() {
 
     setScreen('playing');
     setElapsed(0);
+    setElapsedHiRes(0);
     setLocalScore(0);
+    setNoteResults({});
+
+    // Open the note-results channel — sends this player's own hit/miss
+    // results to the host (and anyone else listening), and also receives
+    // others' results so other lanes can show hit/miss in "All Voices".
+    const noteChannel = openNoteResultsChannel(session!.id, r =>
+      setNoteResults(prev => ({ ...prev, [r.noteId]: r.hit }))
+    );
+    noteChannelRef.current = noteChannel;
 
     // Start score engine
     const score = new ScoreEngine({
@@ -153,6 +168,11 @@ function PhonePageInner() {
       sessionId:    session!.id,
       difficulty:   'medium',
       onScoreUpdate: (_, total) => setLocalScore(total),
+      onNoteResult: (result) => {
+        const hit = result.points > 0;
+        setNoteResults(prev => ({ ...prev, [result.noteId]: hit }));
+        noteChannel.send({ type: 'broadcast', event: 'note_result', payload: { partIndex: partIdx, noteId: result.noteId, hit } });
+      },
     });
     scoreRef.current = score;
     score.start();
@@ -165,13 +185,14 @@ function PhonePageInner() {
           if (!part) return;
 
           setPitchHz(frequency);
-          const norm = PitchEngine.normalise(frequency, part.rangeMin, part.rangeMax);
-          setPitchNorm(norm);
           setMicAllowed(true);
 
           // Use the high-resolution AudioContext-clock timestamp (not the
           // 1Hz `elapsed` UI state) for scoring — onset-timing accuracy
-          // needs sub-second precision.
+          // needs sub-second precision. Also drives smooth lane scrolling,
+          // since this callback already fires every animation frame.
+          setElapsedHiRes(timestamp);
+
           const tgt = scoreRef.current?.targetNormAt(timestamp) ?? 0;
           setTargetNorm(tgt);
           const tgtHz = PitchEngine.denormalise(tgt, part.rangeMin, part.rangeMax);
@@ -191,8 +212,8 @@ function PhonePageInner() {
       setMicAllowed(false);
     }
 
-    // Elapsed timer (drives the on-screen seconds display / note-lane scroll
-    // only — scoring uses PitchSample.timestamp above, not this).
+    // Elapsed timer — on-screen seconds display only, unchanged. Lane
+    // scrolling now uses elapsedHiRes (set every animation frame above).
     timerRef.current = setInterval(() => {
       setElapsed(prev => prev + 1);
     }, 1000);
@@ -203,6 +224,7 @@ function PhonePageInner() {
     pitchRef.current?.stop();
     pitchRef.current = null;
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (noteChannelRef.current) { supabase.removeChannel(noteChannelRef.current); noteChannelRef.current = null; }
     await scoreRef.current?.stop();
     scoreRef.current = null;
     setScreen('ended');
@@ -217,12 +239,13 @@ function PhonePageInner() {
       song={song}
       partIdx={partIdx}
       elapsed={elapsed}
+      elapsedHiRes={elapsedHiRes}
       pitchHz={pitchHz}
-      pitchNorm={pitchNorm}
       targetNorm={targetNorm}
       centsDiff={centsDiff}
       localScore={localScore}
       micAllowed={micAllowed}
+      noteResults={noteResults}
     />
   );
   if (screen === 'ended')   return <EndedScreen localScore={localScore} partIdx={partIdx} playerName={player?.player_name ?? ''} />;
@@ -322,146 +345,22 @@ function LobbyScreen({ song, partIdx }: { song: Song | null; partIdx: number }) 
   );
 }
 
-// ── PianoRollPhone ─────────────────────────────────────────────────────────
-// Horizontal scrolling piano roll. Notes flow right→left past a fixed cursor.
-// Player's detected pitch shown as a glowing dot on the cursor line.
-
-function rrPhone(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  if (w < 2 * r) r = w / 2;
-  if (h < 2 * r) r = h / 2;
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-// MIDI range must match editor constants (C2=36, C6=84)
-const PHONE_MIDI_LO = 36;
-const PHONE_MIDI_HI = 84;
-
-function PianoRollPhone({
-  partIdx, elapsed, songDuration, pitchNorm, onTarget, colour, notes,
-}: {
-  partIdx: number;
-  elapsed: number;
-  songDuration: number;
-  pitchNorm: number;
-  onTarget: boolean;
-  colour: string;
-  notes: SongNote[];
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const W = canvas.width  = canvas.offsetWidth;
-    const H = canvas.height = canvas.offsetHeight;
-    ctx.clearRect(0, 0, W, H);
-
-    // Background
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 0, W, H);
-
-    // Horizontal pitch lanes
-    for (let i = 0; i <= 8; i++) {
-      const y = (i / 8) * H;
-      ctx.strokeStyle = i % 2 === 0 ? '#1e293b' : '#172033';
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-
-    // Show 10 seconds of notes. Cursor at 25% from left.
-    const windowSec = 10;
-    const cursorX   = W * 0.25;
-    const pxPerSec  = (W * 0.75) / windowSec;
-    const noteH     = Math.max(12, H * 0.15);
-
-    // Only render notes assigned to this part from the piano roll
-    const partNotes = notes.filter(n => n.part === partIdx);
-
-    partNotes.forEach(n => {
-      const x    = cursorX + (n.start - elapsed) * pxPerSec;
-      const endX = cursorX + (n.end   - elapsed) * pxPerSec;
-      if (endX < 0 || x > W) return;
-
-      const norm   = (n.midi - PHONE_MIDI_LO) / (PHONE_MIDI_HI - PHONE_MIDI_LO);
-      const y      = H - norm * (H - noteH * 1.5) - noteH;
-      const noteW  = Math.max(4, endX - x - 3);
-      const drawX  = Math.max(0, x);
-      const drawW  = Math.min(noteW, W - drawX);
-      const isCurr = elapsed >= n.start && elapsed < n.end;
-
-      ctx.fillStyle   = isCurr ? colour : colour + '55';
-      ctx.strokeStyle = isCurr ? colour + 'cc' : 'transparent';
-      ctx.lineWidth   = 1.5;
-      rrPhone(ctx, drawX, Math.max(2, y), drawW, noteH, 5);
-      ctx.fill();
-      if (isCurr) ctx.stroke();
-
-      // Lyric inside note
-      if (n.lyric && drawW > 18) {
-        ctx.fillStyle = isCurr ? '#fff' : '#ffffff77';
-        ctx.font      = `bold ${Math.min(9, noteH - 4)}px system-ui,sans-serif`;
-        ctx.fillText(n.lyric, drawX + 3, Math.max(2, y) + noteH - 3, drawW - 5);
-      }
-    });
-
-    // Cursor line
-    ctx.strokeStyle = '#ffffff55';
-    ctx.lineWidth   = 2;
-    ctx.setLineDash([5, 4]);
-    ctx.beginPath(); ctx.moveTo(cursorX, 0); ctx.lineTo(cursorX, H); ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Player pitch dot on cursor
-    if (pitchNorm > 0) {
-      const py = H - pitchNorm * H;
-      ctx.shadowColor = onTarget ? colour : 'transparent';
-      ctx.shadowBlur  = onTarget ? 18 : 0;
-      ctx.fillStyle   = onTarget ? colour : '#94a3b8';
-      ctx.beginPath();
-      ctx.arc(cursorX, py, 9, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(cursorX, py, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }, [partIdx, elapsed, songDuration, pitchNorm, onTarget, colour, notes]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      className="w-full rounded-2xl border border-gray-800"
-      style={{ height: 200 }}
-    />
-  );
-}
-
 // ── PlayingScreen (phone) ─────────────────────────────────────────────────
 
 function PlayingScreen({
-  song, partIdx, elapsed, pitchHz, pitchNorm,
-  targetNorm, centsDiff, localScore, micAllowed,
+  song, partIdx, elapsed, elapsedHiRes, pitchHz,
+  targetNorm, centsDiff, localScore, micAllowed, noteResults,
 }: {
   song: Song | null;
   partIdx: number;
   elapsed: number;
+  elapsedHiRes: number;
   pitchHz: number;
-  pitchNorm: number;
   targetNorm: number;
   centsDiff: number;
   localScore: number;
   micAllowed: boolean | null;
+  noteResults: Record<string, boolean>;
 }) {
   const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine');
   const colour    = PART_COLOURS[partIdx];
@@ -472,7 +371,7 @@ function PlayingScreen({
   const part      = song?.parts?.[partIdx];
 
   // Current lyric — only from manually-placed notes in the piano roll
-  const currentNote = (song?.notes ?? []).find(n => n.part === partIdx && elapsed >= n.start && elapsed < n.end && n.lyric);
+  const currentNote = (song?.notes ?? []).find(n => n.part === partIdx && elapsedHiRes >= n.start && elapsedHiRes < n.end && n.lyric);
   const lyric = currentNote?.lyric ?? null;
 
   return (
@@ -519,17 +418,20 @@ function PlayingScreen({
         }
       </div>
 
-      {/* Main game view */}
+      {/* Main game view — same lane renderer everywhere, just one lane vs four */}
       {viewMode === 'mine' ? (
-        <PianoRollPhone
-          partIdx={partIdx}
-          elapsed={elapsed}
-          songDuration={song?.duration ?? 180}
-          pitchNorm={pitchNorm}
-          onTarget={onTarget}
-          colour={colour}
-          notes={song?.notes ?? []}
-        />
+        <div className="flex-1 min-h-0">
+          <SatbLane
+            partIndex={partIdx}
+            partName={PART_NAMES[partIdx]}
+            colour={colour}
+            elapsed={elapsedHiRes}
+            notes={song?.notes ?? []}
+            pitchHz={pitchHz}
+            onTarget={onTarget}
+            noteResults={noteResults}
+          />
+        </div>
       ) : (
         <div className="flex flex-col gap-2 flex-1 min-h-0">
           {[0, 1, 2, 3].map(i => (
@@ -538,10 +440,11 @@ function PlayingScreen({
               partIndex={i}
               partName={PART_NAMES[i]}
               colour={PART_COLOURS[i]}
-              elapsed={elapsed}
+              elapsed={elapsedHiRes}
               notes={song?.notes ?? []}
-              pitchNorm={i === partIdx ? pitchNorm : undefined}
+              pitchHz={i === partIdx ? pitchHz : undefined}
               onTarget={i === partIdx ? onTarget : undefined}
+              noteResults={noteResults}
             />
           ))}
         </div>

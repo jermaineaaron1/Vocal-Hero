@@ -9,6 +9,7 @@ import {
   fetchPlayers,
   subscribeToPlayers,
   subscribeToSession,
+  subscribeToNoteResults,
 } from '@/lib/vocal-hero/supabaseClient';
 import { PitchEngine } from '@/lib/vocal-hero/pitchEngine';
 import { SatbLane } from './SatbLane';
@@ -38,11 +39,15 @@ export default function VocalHeroHostPage() {
   const [session,  setSession]  = useState<GameSession | null>(null);
   const [players,  setPlayers]  = useState<SessionPlayer[]>([]);
   const [elapsed,  setElapsed]  = useState(0);
+  const [elapsedHiRes, setElapsedHiRes] = useState(0); // rAF-driven, for smooth lane scrolling
+  const [noteResults, setNoteResults]   = useState<Record<string, boolean>>({});
   const [error,    setError]    = useState('');
 
   const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const unsubRef   = useRef<(() => void)[]>([]);
+  const rafRef     = useRef<number | null>(null);
+  const playStartRef = useRef(0);
 
   // ── Load songs on mount ──────────────────────────────────────────────────
   useEffect(() => {
@@ -57,6 +62,7 @@ export default function VocalHeroHostPage() {
       unsubRef.current.forEach(fn => fn());
       if (timerRef.current) clearInterval(timerRef.current);
       if (pollRef.current)  clearInterval(pollRef.current);
+      if (rafRef.current)   cancelAnimationFrame(rafRef.current);
     };
   }, []);
 
@@ -82,10 +88,13 @@ export default function VocalHeroHostPage() {
       const sess = await createSession(s.id, HOST_ID);
       setSession(sess);
 
-      // Subscribe to player + session changes
+      // Subscribe to player + session + note hit/miss changes
       const u1 = subscribeToPlayers(sess.id, setPlayers);
       const u2 = subscribeToSession(sess.id, setSession);
-      unsubRef.current = [u1, u2];
+      const u3 = subscribeToNoteResults(sess.id, r =>
+        setNoteResults(prev => ({ ...prev, [r.noteId]: r.hit }))
+      );
+      unsubRef.current = [u1, u2, u3];
 
       // Initial player fetch
       setPlayers(await fetchPlayers(sess.id));
@@ -101,9 +110,10 @@ export default function VocalHeroHostPage() {
     try {
       await startSession(session.id);
       setElapsed(0);
+      setElapsedHiRes(0);
       setScreen('playing');
 
-      // Elapsed timer
+      // Elapsed timer — drives the progress bar + end-of-song check, unchanged
       timerRef.current = setInterval(() => {
         setElapsed(prev => {
           if (!song) return prev;
@@ -114,6 +124,15 @@ export default function VocalHeroHostPage() {
           return prev + 1;
         });
       }, 1000);
+
+      // Smooth scrolling clock — host has no audio engine to piggyback on,
+      // so it gets its own rAF loop purely for lane animation.
+      playStartRef.current = performance.now();
+      const rafTick = () => {
+        setElapsedHiRes((performance.now() - playStartRef.current) / 1000);
+        rafRef.current = requestAnimationFrame(rafTick);
+      };
+      rafRef.current = requestAnimationFrame(rafTick);
     } catch (e: unknown) {
       setError(String(e));
     }
@@ -122,6 +141,7 @@ export default function VocalHeroHostPage() {
   const handleEnd = useCallback(async () => {
     if (!session) return;
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (rafRef.current)   { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     try { await endSession(session.id); } catch { /* ignore */ }
     setPlayers(await fetchPlayers(session.id));
     setScreen('ended');
@@ -134,6 +154,8 @@ export default function VocalHeroHostPage() {
     setSession(null);
     setPlayers([]);
     setElapsed(0);
+    setElapsedHiRes(0);
+    setNoteResults({});
     setScreen('idle');
   }
 
@@ -195,7 +217,14 @@ export default function VocalHeroHostPage() {
           <LobbyScreen session={session} song={song} players={players} onStart={handleStart} />
         )}
         {screen === 'playing' && session && song && (
-          <PlayingScreen song={song} players={players} elapsed={elapsed} onEnd={handleEnd} />
+          <PlayingScreen
+            song={song}
+            players={players}
+            elapsed={elapsed}
+            elapsedHiRes={elapsedHiRes}
+            noteResults={noteResults}
+            onEnd={handleEnd}
+          />
         )}
         {screen === 'ended'   && song && (
           <EndedScreen song={song} players={players} onReset={handleReset} />
@@ -361,19 +390,21 @@ function extractYtId(url: string): string | null {
 // ── PlayingScreen ──────────────────────────────────────────────────────────
 
 function PlayingScreen({
-  song, players, elapsed, onEnd,
+  song, players, elapsed, elapsedHiRes, noteResults, onEnd,
 }: {
   song: Song;
   players: SessionPlayer[];
   elapsed: number;
+  elapsedHiRes: number;
+  noteResults: Record<string, boolean>;
   onEnd: () => void;
 }) {
   const progress = song.duration > 0 ? elapsed / song.duration : 0;
   const videoId  = song.yt_url ? extractYtId(song.yt_url) : null;
 
-  // Current lyric — only from manually-placed notes in the piano roll
-  const currentNote = (song.notes ?? []).find(n => elapsed >= n.start && elapsed < n.end && n.lyric);
-  const lyric = currentNote ? { primary: currentNote.lyric, translation: '' } : null;
+  // Soprano-specific lyric — shown right above the Soprano lane below,
+  // not whichever part happens to have a lyric at this instant.
+  const sopranoNote = (song.notes ?? []).find(n => n.part === 0 && elapsedHiRes >= n.start && elapsedHiRes < n.end && n.lyric);
 
   return (
     <div className="flex flex-col h-full p-4 gap-4">
@@ -397,22 +428,16 @@ function PlayingScreen({
         />
       </div>
 
-      {/* Current lyric — top, above the rolls */}
-      <div className="text-center min-h-[2.5rem] flex flex-col items-center justify-center">
-        {lyric ? (
-          <>
-            <p className="text-2xl font-bold text-white leading-tight">{lyric.primary}</p>
-            {lyric.translation && (
-              <p className="text-sm text-gray-400 mt-0.5 italic">{lyric.translation}</p>
-            )}
-          </>
-        ) : (
-          <p className="text-gray-600 text-sm">♪ ♪ ♪</p>
-        )}
-      </div>
-
       {/* SATB lanes — all 4 voices, stacked and scrolling toward the cue line */}
       <div className="flex flex-col gap-2 flex-1 min-h-0">
+        {/* Soprano lyric strip — directly above the Soprano lane */}
+        <div className="text-center min-h-[2rem] flex items-center justify-center">
+          {sopranoNote ? (
+            <p className="text-xl font-bold text-white leading-tight">{sopranoNote.lyric}</p>
+          ) : (
+            <p className="text-gray-600 text-sm">♪ ♪ ♪</p>
+          )}
+        </div>
         {[0, 1, 2, 3].map(i => {
           const partPlayers = players.filter(p => p.part_index === i);
           return (
@@ -421,9 +446,10 @@ function PlayingScreen({
               partIndex={i}
               partName={PART_NAMES[i]}
               colour={PART_COLOURS[i]}
-              elapsed={elapsed}
+              elapsed={elapsedHiRes}
               notes={song.notes ?? []}
               playerCount={partPlayers.length}
+              noteResults={noteResults}
             />
           );
         })}

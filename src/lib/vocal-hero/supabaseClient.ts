@@ -242,6 +242,51 @@ export function subscribeToSession(
   return () => { supabase.removeChannel(channel); };
 }
 
+// ── Per-note hit/miss results (ephemeral broadcast — no table, no schema) ──
+// A note is scored locally on whichever device is singing it; this just lets
+// other screens (the host) know whether it was a hit or a miss in near-real
+// time, without persisting anything.
+
+export interface NoteResultPayload {
+  partIndex: number;
+  noteId: string;
+  hit: boolean;
+}
+
+/**
+ * Phone-side: opens a channel that both sends and receives note results for
+ * a session. Caller keeps the returned channel to call `.send()` on it and
+ * `supabase.removeChannel(channel)` when the game ends.
+ */
+export function openNoteResultsChannel(
+  sessionId: string,
+  onResult: (result: NoteResultPayload) => void
+) {
+  const channel = supabase
+    .channel(`vh_note_results:${sessionId}`)
+    .on('broadcast', { event: 'note_result' }, ({ payload }) => {
+      onResult(payload as NoteResultPayload);
+    })
+    .subscribe();
+
+  return channel;
+}
+
+/** Host-side: listen-only. Returns an unsubscribe function. */
+export function subscribeToNoteResults(
+  sessionId: string,
+  onResult: (result: NoteResultPayload) => void
+): () => void {
+  const channel = supabase
+    .channel(`vh_note_results:${sessionId}`)
+    .on('broadcast', { event: 'note_result' }, ({ payload }) => {
+      onResult(payload as NoteResultPayload);
+    })
+    .subscribe();
+
+  return () => { supabase.removeChannel(channel); };
+}
+
 // ── High Scores ────────────────────────────────────────────────────────────
 
 export async function fetchHighScores(

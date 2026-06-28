@@ -3,16 +3,23 @@
 import { useEffect, useRef } from 'react';
 import type { SongNote } from '@/lib/vocal-hero/types';
 
-// Shared SATB note lane — one full-width row per voice part, used by both
-// the host (all 4 parts, always) and the phone ("All Voices" view, with the
-// player's own part highlighted). Generalizes the scrolling-cursor pattern
-// that already worked well on the phone's single-part view: notes scroll
-// right→left through a fixed lookahead window toward a cue line, instead of
-// squeezing the whole song into one static width (which is what made notes
-// on the host screen unreadably small).
+// Shared SATB note lane — one full-width row per voice part, used by the
+// host (all 4 parts, always), the phone's "My Part" view (one lane), and
+// the phone's "All Voices" view (4 lanes, only the viewer's own part gets a
+// live pitch dot). Guitar-Hero-style: notes scroll right→left through a
+// fixed lookahead window toward a glowing cue line, each lane normalizes
+// pitch against its OWN sung range (not a fixed 4-octave range) so pitch
+// movement is actually visible even for narrow-range harmony parts, and
+// already-passed notes turn green (hit) or dim red (miss) once a result
+// for that note id arrives.
 
-const MIDI_LO = 36; // C2 — must match the editor's range
-const MIDI_HI = 84; // C6
+const DEFAULT_MIDI_LO = 36; // C2 — fallback when a lane has no notes yet
+const DEFAULT_MIDI_HI = 84; // C6
+const MIN_SPAN = 12;        // never normalize against less than one octave
+
+function hzToMidi(hz: number): number {
+  return 69 + 12 * Math.log2(hz / 440);
+}
 
 function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   if (w < 2 * r) r = w / 2;
@@ -32,15 +39,16 @@ export interface SatbLaneProps {
   colour: string;
   elapsed: number;
   notes: SongNote[];
-  pitchNorm?: number;   // only passed for the viewer's own part — draws the live dot
+  pitchHz?: number;     // raw frequency — only passed for the viewer's own part
   onTarget?: boolean;
   playerCount?: number; // host use — small "N×" badge
   windowSec?: number;
+  noteResults?: Record<string, boolean>; // noteId -> hit(true)/miss(false), resolved notes only
 }
 
 export function SatbLane({
   partIndex, partName, colour, elapsed, notes,
-  pitchNorm, onTarget, playerCount, windowSec = 10,
+  pitchHz, onTarget, playerCount, windowSec = 10, noteResults,
 }: SatbLaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -58,7 +66,7 @@ export function SatbLane({
     ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, W, H);
 
-    // Alternating pitch-lane bands
+    // Alternating depth bands
     for (let i = 0; i <= 8; i++) {
       const y = (i / 8) * H;
       ctx.strokeStyle = i % 2 === 0 ? '#1e293b' : '#172033';
@@ -66,61 +74,95 @@ export function SatbLane({
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
     }
 
+    const partNotes = notes.filter(n => n.part === partIndex);
+
+    // Normalize this lane against its OWN sung range, not a fixed 4-octave
+    // span — otherwise a narrow-range harmony part barely moves vertically.
+    let midiLo = DEFAULT_MIDI_LO, midiHi = DEFAULT_MIDI_HI;
+    if (partNotes.length > 0) {
+      let lo = Math.min(...partNotes.map(n => n.midi)) - 2;
+      let hi = Math.max(...partNotes.map(n => n.midi)) + 2;
+      if (hi - lo < MIN_SPAN) {
+        const mid = (hi + lo) / 2;
+        lo = mid - MIN_SPAN / 2;
+        hi = mid + MIN_SPAN / 2;
+      }
+      midiLo = lo; midiHi = hi;
+    }
+    const pitchToY = (midi: number, noteH: number) => {
+      const norm = (midi - midiLo) / (midiHi - midiLo);
+      return H - norm * (H - noteH * 1.5) - noteH;
+    };
+
     const cursorX  = W * 0.22;
     const pxPerSec = (W * 0.78) / windowSec;
-    const noteH    = Math.max(16, H * 0.16);
-
-    const partNotes = notes.filter(n => n.part === partIndex);
+    const noteH    = Math.max(20, H * 0.22);
 
     partNotes.forEach(n => {
       const x    = cursorX + (n.start - elapsed) * pxPerSec;
       const endX = cursorX + (n.end   - elapsed) * pxPerSec;
       if (endX < 0 || x > W) return;
 
-      const norm   = (n.midi - MIDI_LO) / (MIDI_HI - MIDI_LO);
-      const y      = H - norm * (H - noteH * 1.5) - noteH;
+      const y      = pitchToY(n.midi, noteH);
       const noteW  = Math.max(4, endX - x - 3);
       const drawX  = Math.max(0, x);
       const drawW  = Math.min(noteW, W - drawX);
       const isCurr = elapsed >= n.start && elapsed < n.end;
+      const isPast = n.end <= elapsed;
+      const result = noteResults?.[n.id]; // true=hit, false=miss, undefined=unknown
 
-      ctx.fillStyle   = isCurr ? colour : colour + '55';
-      ctx.strokeStyle = isCurr ? colour + 'cc' : 'transparent';
-      ctx.lineWidth   = 1.5;
-      rr(ctx, drawX, Math.max(2, y), drawW, noteH, 6);
+      let fill = colour + '70';   // upcoming — soft persistent glow
+      let glow = colour;
+      let glowBlur = 4;
+      if (isCurr) {
+        fill = colour; glow = colour; glowBlur = 16;
+      } else if (isPast) {
+        if (result === true)      { fill = '#22c55e'; glow = '#22c55e'; glowBlur = 10; }
+        else if (result === false) { fill = '#3f3f46'; glow = 'transparent'; glowBlur = 0; }
+        else { fill = colour + '40'; glow = 'transparent'; glowBlur = 0; }
+      }
+
+      ctx.save();
+      ctx.shadowColor = glow;
+      ctx.shadowBlur  = glowBlur;
+      ctx.fillStyle   = fill;
+      rr(ctx, drawX, Math.max(2, y), drawW, noteH, 7);
       ctx.fill();
-      if (isCurr) ctx.stroke();
+      ctx.restore();
 
-      if (n.lyric && drawW > 20) {
-        ctx.fillStyle = isCurr ? '#fff' : '#ffffff88';
-        ctx.font      = `bold ${Math.min(13, noteH - 4)}px system-ui,sans-serif`;
-        ctx.fillText(n.lyric, drawX + 5, Math.max(2, y) + noteH - 4, drawW - 8);
+      if (n.lyric && drawW > 22) {
+        ctx.fillStyle = isPast && result === false ? '#9ca3af' : '#ffffff';
+        ctx.font      = `bold ${Math.min(14, noteH - 4)}px system-ui,sans-serif`;
+        ctx.fillText(n.lyric, drawX + 6, Math.max(2, y) + noteH - 5, drawW - 10);
       }
     });
 
-    // Cue line — solid, thick, glowing gold. This is the "sing now" marker.
+    // Cue line — solid, thick, glowing gold "strike zone".
     ctx.save();
     ctx.shadowColor = '#f0b429';
-    ctx.shadowBlur  = 14;
+    ctx.shadowBlur  = 16;
     ctx.strokeStyle = '#f0b429';
     ctx.lineWidth   = 3;
     ctx.beginPath(); ctx.moveTo(cursorX, 0); ctx.lineTo(cursorX, H); ctx.stroke();
     ctx.restore();
 
-    // Live pitch dot (own part only)
-    if (pitchNorm !== undefined && pitchNorm > 0) {
-      const py = H - pitchNorm * H;
+    // Live pitch dot (own part only) — converted to the SAME midi scale the
+    // notes use, so it actually lines up with what's being sung.
+    if (pitchHz !== undefined && pitchHz > 0) {
+      const midi = hzToMidi(pitchHz);
+      const norm = (midi - midiLo) / (midiHi - midiLo);
+      const py   = H - Math.max(0, Math.min(1, norm)) * H;
       ctx.shadowColor = onTarget ? colour : 'transparent';
-      ctx.shadowBlur  = onTarget ? 18 : 0;
+      ctx.shadowBlur  = onTarget ? 20 : 0;
       ctx.fillStyle   = onTarget ? colour : '#94a3b8';
       ctx.beginPath();
-      ctx.arc(cursorX, py, 10, 0, Math.PI * 2);
+      ctx.arc(cursorX, py, 11, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
 
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      ctx.arc(cursorX, py, 3.5, 0, Math.PI * 2);
+      ctx.arc(cursorX, py, 4, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -131,7 +173,7 @@ export function SatbLane({
       ctx.fillText('No notes assigned', W / 2, H / 2);
       ctx.textAlign = 'left';
     }
-  }, [partIndex, elapsed, notes, colour, pitchNorm, onTarget, windowSec]);
+  }, [partIndex, elapsed, notes, colour, pitchHz, onTarget, windowSec, noteResults]);
 
   return (
     <div
