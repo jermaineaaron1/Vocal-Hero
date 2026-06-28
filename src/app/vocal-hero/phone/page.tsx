@@ -11,6 +11,7 @@ import {
 } from '@/lib/vocal-hero/supabaseClient';
 import { PitchEngine } from '@/lib/vocal-hero/pitchEngine';
 import { ScoreEngine, CENT_TOLERANCE } from '@/lib/vocal-hero/scoreEngine';
+import { SatbLane } from '../SatbLane';
 import type { Song, GameSession, SessionPlayer, SatbPart, SongNote } from '@/lib/vocal-hero/types';
 
 const PART_NAMES   = ['Soprano', 'Alto', 'Tenor', 'Bass'];
@@ -462,6 +463,7 @@ function PlayingScreen({
   localScore: number;
   micAllowed: boolean | null;
 }) {
+  const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine');
   const colour    = PART_COLOURS[partIdx];
   const tolerance = CENT_TOLERANCE['medium'];
   const absCents  = Math.abs(centsDiff);
@@ -488,6 +490,22 @@ function PlayingScreen({
         </div>
       </div>
 
+      {/* My Part / All Voices toggle */}
+      <div className="flex items-center gap-1 bg-gray-900 border border-gray-700 rounded-full p-0.5 self-center">
+        <button
+          onClick={() => setViewMode('mine')}
+          className={`text-xs font-semibold px-3 py-1 rounded-full transition-colors ${viewMode === 'mine' ? 'bg-gray-700 text-white' : 'text-gray-500'}`}
+        >
+          My Part
+        </button>
+        <button
+          onClick={() => setViewMode('all')}
+          className={`text-xs font-semibold px-3 py-1 rounded-full transition-colors ${viewMode === 'all' ? 'bg-gray-700 text-white' : 'text-gray-500'}`}
+        >
+          All Voices
+        </button>
+      </div>
+
       {/* Progress bar */}
       <div className="w-full bg-gray-800 rounded-full h-1">
         <div className="h-1 rounded-full transition-all" style={{ width: `${progress * 100}%`, background: colour }} />
@@ -501,16 +519,33 @@ function PlayingScreen({
         }
       </div>
 
-      {/* Piano roll — main game view */}
-      <PianoRollPhone
-        partIdx={partIdx}
-        elapsed={elapsed}
-        songDuration={song?.duration ?? 180}
-        pitchNorm={pitchNorm}
-        onTarget={onTarget}
-        colour={colour}
-        notes={song?.notes ?? []}
-      />
+      {/* Main game view */}
+      {viewMode === 'mine' ? (
+        <PianoRollPhone
+          partIdx={partIdx}
+          elapsed={elapsed}
+          songDuration={song?.duration ?? 180}
+          pitchNorm={pitchNorm}
+          onTarget={onTarget}
+          colour={colour}
+          notes={song?.notes ?? []}
+        />
+      ) : (
+        <div className="flex flex-col gap-2 flex-1 min-h-0">
+          {[0, 1, 2, 3].map(i => (
+            <SatbLane
+              key={i}
+              partIndex={i}
+              partName={PART_NAMES[i]}
+              colour={PART_COLOURS[i]}
+              elapsed={elapsed}
+              notes={song?.notes ?? []}
+              pitchNorm={i === partIdx ? pitchNorm : undefined}
+              onTarget={i === partIdx ? onTarget : undefined}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Note name + tuning indicator */}
       <div className="flex items-center justify-between px-2">

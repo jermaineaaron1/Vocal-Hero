@@ -11,7 +11,8 @@ import {
   subscribeToSession,
 } from '@/lib/vocal-hero/supabaseClient';
 import { PitchEngine } from '@/lib/vocal-hero/pitchEngine';
-import type { Song, GameSession, SessionPlayer, SongNote } from '@/lib/vocal-hero/types';
+import { SatbLane } from './SatbLane';
+import type { Song, GameSession, SessionPlayer } from '@/lib/vocal-hero/types';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -410,18 +411,19 @@ function PlayingScreen({
         )}
       </div>
 
-      {/* SATB piano rolls */}
-      <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">
+      {/* SATB lanes — all 4 voices, stacked and scrolling toward the cue line */}
+      <div className="flex flex-col gap-2 flex-1 min-h-0">
         {[0, 1, 2, 3].map(i => {
           const partPlayers = players.filter(p => p.part_index === i);
           return (
-            <PianoRollCanvas
+            <SatbLane
               key={i}
               partIndex={i}
-              progress={progress}
-              players={partPlayers}
+              partName={PART_NAMES[i]}
+              colour={PART_COLOURS[i]}
+              elapsed={elapsed}
               notes={song.notes ?? []}
-              songDuration={song.duration}
+              playerCount={partPlayers.length}
             />
           );
         })}
@@ -452,129 +454,6 @@ function PlayingScreen({
           End Game
         </button>
       </div>
-    </div>
-  );
-}
-
-// ── PianoRollCanvas (host) ────────────────────────────────────────────────
-// Draws note blocks like a piano roll. Each of the 24 keyframes = one block
-// placed vertically by its normalised pitch. Playhead sweeps left→right.
-
-function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  // roundRect polyfill
-  if (w < 2 * r) r = w / 2;
-  if (h < 2 * r) r = h / 2;
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-// MIDI range must match the editor constants
-const GAME_MIDI_LO = 36;
-const GAME_MIDI_HI = 84;
-
-function PianoRollCanvas({
-  partIndex, progress, players, notes, songDuration,
-}: {
-  partIndex: number;
-  progress: number;
-  players: SessionPlayer[];
-  notes: SongNote[];
-  songDuration?: number;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const colour    = PART_COLOURS[partIndex] ?? '#fff';
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const W = canvas.width  = canvas.offsetWidth;
-    const H = canvas.height = canvas.offsetHeight;
-    ctx.clearRect(0, 0, W, H);
-
-    // Background
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 0, W, H);
-
-    // Horizontal pitch lanes
-    for (let lane = 0; lane <= 8; lane++) {
-      const y = (lane / 8) * H;
-      ctx.strokeStyle = lane % 2 === 0 ? '#1e293b' : '#172033';
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-
-    const dur     = Math.max(songDuration ?? 1, 1);
-    const noteH   = Math.max(10, H * 0.12);
-    const pad     = 2;
-    const elapsed = progress * dur;
-
-    // Only render notes assigned to this part from the piano roll
-    const partNotes = notes.filter(n => n.part === partIndex);
-
-    partNotes.forEach(n => {
-      const norm   = (n.midi - GAME_MIDI_LO) / (GAME_MIDI_HI - GAME_MIDI_LO);
-      const x      = (n.start / dur) * W + pad;
-      const w      = Math.max(4, ((n.end - n.start) / dur) * W - pad * 2);
-      const y      = H - norm * (H - noteH * 1.5) - noteH;
-      const isPast = n.end < elapsed - 0.2;
-      const isCurr = elapsed >= n.start && elapsed < n.end;
-
-      ctx.fillStyle   = isCurr ? colour : isPast ? colour + '33' : colour + '55';
-      ctx.strokeStyle = isCurr ? colour : 'transparent';
-      ctx.lineWidth   = 2;
-      rr(ctx, x, Math.max(4, y), w, noteH, 4);
-      ctx.fill();
-      if (isCurr) ctx.stroke();
-
-      // Lyric inside note
-      if (n.lyric && w > 20) {
-        ctx.fillStyle = isCurr ? '#fff' : '#ffffff88';
-        ctx.font      = `bold ${Math.min(10, noteH - 4)}px system-ui,sans-serif`;
-        ctx.fillText(n.lyric, x + 4, Math.max(4, y) + noteH - 3, w - 6);
-      }
-    });
-
-    // Playhead
-    const px = progress * W;
-    ctx.strokeStyle = '#ffffffaa';
-    ctx.lineWidth   = 2;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Part label
-    ctx.fillStyle = colour;
-    ctx.font      = 'bold 11px monospace';
-    ctx.fillText(PART_NAMES[partIndex], 8, 16);
-
-    if (players.length > 0) {
-      ctx.fillStyle = colour;
-      ctx.font      = '10px monospace';
-      ctx.fillText(`${players.length}×`, W - 24, 16);
-    }
-
-    // Empty state hint
-    if (partNotes.length === 0) {
-      ctx.fillStyle = colour + '33';
-      ctx.font      = '10px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('No notes assigned', W / 2, H / 2);
-      ctx.textAlign = 'left';
-    }
-
-  }, [partIndex, progress, players, notes, colour, songDuration]);
-
-  return (
-    <div className="relative rounded-xl overflow-hidden border border-gray-800" style={{ minHeight: 140 }}>
-      <canvas ref={canvasRef} className="w-full h-full" />
     </div>
   );
 }

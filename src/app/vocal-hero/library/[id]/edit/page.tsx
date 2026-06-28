@@ -1215,52 +1215,63 @@ export default function SongEditorPage() {
     <div className="h-screen text-white flex flex-col overflow-hidden" style={{background:'#0a0a12',userSelect:'none'}}
       onClick={()=>setCtx2(null)}>
 
-      {/* ── HEADER ── */}
-      <header className="flex-none bg-[#14142a] border-b border-purple-900/30 px-3 py-2 flex items-center gap-2 flex-wrap">
+      {/* ── HEADER ── Title / Tempo / Save are the dominant controls; everything else is secondary. */}
+      <header className="flex-none bg-[#14142a] border-b border-purple-900/30 px-4 py-3 flex items-center gap-3 flex-wrap">
         <button onClick={()=>router.back()}
-          className="text-gray-400 hover:text-white text-xs px-2.5 py-1.5 border border-purple-900/30 rounded transition-colors">
+          className="text-gray-500 hover:text-white text-xs px-2 py-1 transition-colors">
           ← Back
         </button>
-        <span className="text-sm font-bold max-w-[160px] truncate" style={{color:'#22d3ee',fontFamily:"'Orbitron',monospace",letterSpacing:'0.04em'}}>{title||'Untitled'}</span>
-        <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Title"
-          className="hidden sm:block bg-[#1a1a2e] border border-purple-900/30 rounded px-2 py-1 text-xs w-36 focus:outline-none focus:border-[#7c3aed]"/>
+        <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Untitled"
+          className="bg-[#1a1a2e] border border-purple-900/30 rounded-lg px-3 py-2 text-base font-bold w-48 focus:outline-none focus:border-[#7c3aed]"
+          style={{color:'#22d3ee',fontFamily:"'Orbitron',monospace",letterSpacing:'0.02em'}}/>
         <input value={artist} onChange={e=>setArtist(e.target.value)} placeholder="Artist"
-          className="hidden sm:block bg-[#1a1a2e] border border-purple-900/30 rounded px-2 py-1 text-xs w-28 focus:outline-none focus:border-[#7c3aed]"/>
-        <div className="flex items-center gap-0.5 bg-[#1a1a2e] border border-purple-900/30 rounded p-0.5 ml-1">
+          className="hidden sm:block bg-[#1a1a2e] border border-purple-900/30 rounded-lg px-2.5 py-2 text-sm w-32 focus:outline-none focus:border-[#7c3aed]"/>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-500 font-semibold">BPM</span>
+          <input type="number" min={20} max={300} value={bpm}
+            onChange={e=>setBpm(Math.max(20,Math.min(300,parseInt(e.target.value)||120)))}
+            className="bg-[#1a1a2e] border border-purple-900/30 rounded-lg px-2 py-2 text-sm w-16 text-[#22d3ee] font-mono font-bold focus:outline-none focus:border-purple-500"/>
+        </div>
+        <div className="flex-1"/>
+        <button onClick={handleSave} disabled={saving}
+          className="disabled:opacity-50 text-white text-sm font-bold px-6 py-2.5 rounded-lg transition-colors" style={{background:'linear-gradient(135deg,#7c3aed,#6d28d9)'}}>
+          {saving?'Saving…':'Save & Publish'}
+        </button>
+      </header>
+
+      {/* ── SECONDARY TOOLBAR ── view tabs + import/detect/harmony actions, visually quiet */}
+      <div className="flex-none bg-[#10101e] border-b border-purple-900/20 px-4 py-1.5 flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-0.5 bg-[#1a1a2e] border border-purple-900/20 rounded p-0.5">
           <button onClick={()=>setView('pianoroll')}
-            className={`text-xs px-2.5 py-1 rounded transition-colors ${view==='pianoroll'?'bg-purple-900/60 border border-purple-500 text-purple-200':'text-gray-500 hover:text-gray-300'}`}>
+            className={`text-[11px] px-2 py-0.5 rounded transition-colors ${view==='pianoroll'?'bg-purple-900/50 text-purple-300':'text-gray-600 hover:text-gray-400'}`}>
             Piano Roll
           </button>
           <button onClick={()=>setView('arrangement')}
-            className={`text-xs px-2.5 py-1 rounded transition-colors ${view==='arrangement'?'bg-purple-900/60 border border-purple-500 text-purple-200':'text-gray-500 hover:text-gray-300'}`}>
+            className={`text-[11px] px-2 py-0.5 rounded transition-colors ${view==='arrangement'?'bg-purple-900/50 text-purple-300':'text-gray-600 hover:text-gray-400'}`}>
             Arrangement
           </button>
         </div>
-        <div className="flex-1"/>
+        <div className="w-px h-3.5 bg-purple-900/30"/>
         {/* Hidden MIDI file input */}
         <input ref={midiInputRef} type="file" accept=".mid,.midi,audio/midi,audio/x-midi"
           className="hidden" onChange={handleMidiImport}/>
         <button onClick={()=>midiInputRef.current?.click()}
-          className="text-xs bg-[#1a1a2e] hover:bg-[#22223a] border border-purple-900/40 text-[#22d3ee] px-3 py-1.5 rounded flex items-center gap-1 transition-colors"
+          className="text-[11px] text-gray-500 hover:text-gray-300 px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
           title="Upload a MIDI file to populate the piano roll (replaces AI detection)">
           🎹 Import MIDI
         </button>
         <button onClick={handleDetect} disabled={analyzing||!ytUrl}
-          className="text-xs bg-purple-900 hover:bg-purple-800 disabled:opacity-40 text-purple-200 px-3 py-1.5 rounded flex items-center gap-1 transition-colors">
+          className="text-[11px] text-gray-500 hover:text-gray-300 disabled:opacity-40 px-2 py-0.5 rounded flex items-center gap-1 transition-colors">
           {analyzing
-            ? <><span className="animate-spin inline-block w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full"/>Detecting…</>
+            ? <><span className="animate-spin inline-block w-2.5 h-2.5 border-2 border-purple-400 border-t-transparent rounded-full"/>Detecting…</>
             : '🎤 Detect Vocals'}
         </button>
         <button onClick={handleRegenerateHarmony} disabled={!notes.some(n=>n.part===0)}
           title="Regenerate Alto/Tenor/Bass from the current melody (part 0). Melody notes are left untouched."
-          className="text-xs bg-[#1a1a2e] hover:bg-[#22223a] disabled:opacity-40 border border-purple-900/40 text-[#fb923c] px-3 py-1.5 rounded flex items-center gap-1 transition-colors">
+          className="text-[11px] text-gray-500 hover:text-gray-300 disabled:opacity-40 px-2 py-0.5 rounded flex items-center gap-1 transition-colors">
           🎼 Regenerate Harmony
         </button>
-        <button onClick={handleSave} disabled={saving}
-          className="disabled:opacity-50 text-white text-xs font-bold px-4 py-1.5 rounded transition-colors" style={{background:'linear-gradient(135deg,#7c3aed,#6d28d9)'}}>
-          {saving?'Saving…':'Save & Publish'}
-        </button>
-      </header>
+      </div>
 
       {/* ── YOUTUBE + CONTROLS ── */}
       <div className="flex-none flex bg-[#14142a] border-b border-purple-900/30" style={{minHeight:0}}>
@@ -1271,93 +1282,88 @@ export default function SongEditorPage() {
         </div>
 
         <div className="flex flex-col flex-1 min-w-0 py-1 px-2 gap-1">
-          {/* Transport */}
-          <div className="flex items-center gap-2 flex-wrap">
+          {/* Transport — kept fully functional, just visually quieter than the header */}
+          <div className="flex items-center gap-1.5 flex-wrap opacity-90">
             {/* Tool mode: Select / Draw / Erase */}
-            <div className="flex rounded overflow-hidden border border-purple-900/40 flex-shrink-0">
+            <div className="flex rounded overflow-hidden border border-purple-900/20 flex-shrink-0">
               <button onClick={()=>setDrawMode('select')} title="Select (S): click to select, drag to box-select"
-                className={`text-xs px-2.5 py-1 transition-colors flex items-center gap-1 ${drawMode==='select'?'bg-[#22d3ee] text-[#0a0a12] font-bold':'bg-[#14142a] text-gray-500 hover:text-gray-300'}`}>
+                className={`text-[11px] px-2 py-0.5 transition-colors flex items-center gap-1 ${drawMode==='select'?'bg-[#22d3ee]/80 text-[#0a0a12] font-semibold':'bg-[#14142a] text-gray-600 hover:text-gray-400'}`}>
                 ↖ Select
               </button>
               <button onClick={()=>setDrawMode('draw')} title="Draw (D): click to add note, drag to set length"
-                className={`text-xs px-2.5 py-1 transition-colors flex items-center gap-1 ${drawMode==='draw'?'bg-[#7c3aed] text-white font-bold':'bg-[#14142a] text-gray-500 hover:text-gray-300'}`}>
+                className={`text-[11px] px-2 py-0.5 transition-colors flex items-center gap-1 ${drawMode==='draw'?'bg-[#7c3aed]/80 text-white font-semibold':'bg-[#14142a] text-gray-600 hover:text-gray-400'}`}>
                 ✏ Draw
               </button>
               <button onClick={()=>setDrawMode('erase')} title="Erase (E): click any note to delete it"
-                className={`text-xs px-2.5 py-1 transition-colors flex items-center gap-1 ${drawMode==='erase'?'bg-red-700 text-white font-bold':'bg-[#14142a] text-gray-500 hover:text-gray-300'}`}>
+                className={`text-[11px] px-2 py-0.5 transition-colors flex items-center gap-1 ${drawMode==='erase'?'bg-red-700/80 text-white font-semibold':'bg-[#14142a] text-gray-600 hover:text-gray-400'}`}>
                 ⌫ Erase
               </button>
             </div>
-            <div className="w-px h-4 bg-purple-900/40"/>
+            <div className="w-px h-3.5 bg-purple-900/20"/>
             {vid&&(
               <button onClick={()=>setYtHide(h=>!h)}
-                className="text-xs text-gray-500 hover:text-gray-300 border border-purple-900/30 rounded px-2 py-1 transition-colors">
+                className="text-[11px] text-gray-600 hover:text-gray-400 px-1.5 py-0.5 transition-colors">
                 {ytHide?'▶ Video':'◀ Hide'}
               </button>
             )}
             <button onClick={()=>ytPlaying?playerRef.current?.pauseVideo():playerRef.current?.playVideo()}
-              className="w-8 h-8 flex items-center justify-center bg-[#1a1a2e] hover:bg-[#1e1e3a] border border-purple-900/30 rounded text-sm transition-colors">
+              className="w-6 h-6 flex items-center justify-center bg-[#1a1a2e] hover:bg-[#1e1e3a] border border-purple-900/20 rounded text-xs transition-colors">
               {ytPlaying?'⏸':'▶'}
             </button>
             <button onClick={()=>seekTo(0)} title="Go to start"
-              className="text-xs text-gray-500 hover:text-white border border-purple-900/30 rounded px-2 py-1 transition-colors">⏮</button>
+              className="text-[11px] text-gray-600 hover:text-gray-400 px-1 transition-colors">⏮</button>
             <button
               onClick={()=>startPreview(false)}
               title={previewing ? 'Stop preview' : 'Preview notes from current position'}
-              className={`text-xs px-2 py-1 border rounded transition-colors ${previewing?'bg-amber-800 border-amber-500 text-amber-200':'border-purple-900/30 text-gray-400 hover:text-white'}`}>
+              className={`text-[11px] px-1.5 py-0.5 rounded transition-colors ${previewing?'bg-amber-800/70 text-amber-200':'text-gray-500 hover:text-gray-300'}`}>
               {previewing ? '⏹ Stop' : '🔊 Preview'}
             </button>
             <button
               onClick={()=>startPreview(true)}
               title="Play all notes from start"
               disabled={previewing}
-              className="text-xs px-2 py-1 border border-purple-900/30 rounded text-gray-400 hover:text-white disabled:opacity-40 transition-colors">
+              className="text-[11px] px-1.5 py-0.5 text-gray-500 hover:text-gray-300 disabled:opacity-40 transition-colors">
               🔊↺
             </button>
-            <span className="text-xs font-mono text-[#22d3ee] tabular-nums min-w-[70px]">{fmtTime(ytTime)} / {fmtTime(ytDur||duration)}</span>
-            <div className="w-px h-4 bg-purple-900/40"/>
+            <span className="text-[11px] font-mono text-gray-500 tabular-nums min-w-[64px]">{fmtTime(ytTime)} / {fmtTime(ytDur||duration)}</span>
+            <div className="w-px h-3.5 bg-purple-900/20"/>
             {/* Zoom */}
-            <button onClick={()=>setZoom(z=>clamp(z*0.75,20,800))} className="text-xs border border-purple-900/30 rounded w-6 h-6 flex items-center justify-center hover:bg-[#22223a] transition-colors">−</button>
-            <span className="text-xs text-gray-500 w-14 text-center tabular-nums">{Math.round(zoom)}px/s</span>
-            <button onClick={()=>setZoom(z=>clamp(z*1.33,20,800))} className="text-xs border border-purple-900/30 rounded w-6 h-6 flex items-center justify-center hover:bg-[#22223a] transition-colors">+</button>
-            <div className="w-px h-4 bg-purple-900/40"/>
-            {/* BPM */}
-            <span className="text-xs text-gray-500">BPM:</span>
-            <input type="number" min={20} max={300} value={bpm}
-              onChange={e=>setBpm(Math.max(20,Math.min(300,parseInt(e.target.value)||120)))}
-              className="text-xs bg-[#1a1a2e] border border-purple-900/30 rounded px-1.5 py-0.5 w-14 text-[#22d3ee] font-mono focus:outline-none focus:border-purple-500"/>
+            <button onClick={()=>setZoom(z=>clamp(z*0.75,20,800))} className="text-[11px] text-gray-600 hover:text-gray-400 w-5 h-5 flex items-center justify-center transition-colors">−</button>
+            <span className="text-[11px] text-gray-600 w-12 text-center tabular-nums">{Math.round(zoom)}px/s</span>
+            <button onClick={()=>setZoom(z=>clamp(z*1.33,20,800))} className="text-[11px] text-gray-600 hover:text-gray-400 w-5 h-5 flex items-center justify-center transition-colors">+</button>
+            <div className="w-px h-3.5 bg-purple-900/20"/>
             {/* Time signature */}
             <select value={timeSig} onChange={e=>setTimeSig(+e.target.value)}
-              className="text-xs bg-[#1a1a2e] border border-purple-900/30 rounded px-1 py-0.5 text-gray-300 focus:outline-none">
+              className="text-[11px] bg-[#1a1a2e] border border-purple-900/20 rounded px-1 py-0.5 text-gray-500 focus:outline-none">
               <option value={2}>2/4</option>
               <option value={3}>3/4</option>
               <option value={4}>4/4</option>
               <option value={6}>6/8</option>
             </select>
-            <div className="w-px h-4 bg-purple-900/40"/>
+            <div className="w-px h-3.5 bg-purple-900/20"/>
             {/* Musical snap grid */}
-            <span className="text-xs text-gray-500">Grid:</span>
+            <span className="text-[11px] text-gray-600">Grid:</span>
             {(['off','32','16','8','4','4d','8d','2','1'] as SnapMode[]).map(v=>(
               <button key={v} onClick={()=>setSnapMode(v)}
-                className={`text-xs px-1.5 py-0.5 rounded border transition-colors ${snapMode===v?'bg-purple-900/60 border-purple-500 text-purple-200':'border-purple-900/30 text-gray-500 hover:text-white'}`}>
+                className={`text-[11px] px-1 py-0.5 rounded transition-colors ${snapMode===v?'bg-purple-900/40 text-purple-300':'text-gray-600 hover:text-gray-400'}`}>
                 {v==='off'?'Off':v==='1'?'1':v==='2'?'½':v==='4'?'¼':v==='8'?'⅛':v==='4d'?'¼·':v==='8d'?'⅛·':v==='16'?'1/16':'1/32'}
               </button>
             ))}
           </div>
-          {/* Part selector */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs text-gray-600">Paint:</span>
+          {/* Part selector — bold pills, the main thing you interact with while editing */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-gray-500 font-semibold">Paint:</span>
             {PARTS.map((pn,pi)=>(
               <button key={pi}
                 onClick={()=>{ actPartR.current=pi; setActPart(pi); setVis(v=>{const n=[...v];n[pi]=true;return n;}); }}
                 onContextMenu={e=>{e.preventDefault();setVis(v=>{const n=[...v];n[pi]=!n[pi];return n;});}}
                 title={`Left click: paint as ${pn} · Right click: toggle visibility`}
-                className={`text-xs px-2 py-0.5 rounded border transition-all ${actPart===pi?'border-white font-bold scale-105':'border-transparent'} ${!vis[pi]?'opacity-25':''}`}
-                style={{background:PCOL[pi]+(actPart===pi?'44':'18'),color:PCOL[pi]}}>
+                className={`text-xs font-bold px-3.5 py-1.5 rounded-full border-2 transition-all ${actPart===pi?'scale-110 border-white':'border-transparent'} ${!vis[pi]?'opacity-25':''}`}
+                style={{background:PCOL[pi]+(actPart===pi?'55':'22'),color:PCOL[pi]}}>
                 {pn}
               </button>
             ))}
-            <button onClick={()=>setVis([true,true,true,true])} className="text-xs text-gray-600 hover:text-gray-300 px-1.5 border border-transparent hover:border-purple-900/30 rounded transition-colors">All</button>
+            <button onClick={()=>setVis([true,true,true,true])} className="text-xs text-gray-600 hover:text-gray-300 px-2 py-1 rounded-full border border-transparent hover:border-purple-900/30 transition-colors">All</button>
             <div className="flex-1"/>
             <span className="text-xs text-gray-700">{notes.length} notes</span>
             {notes.length>0&&(
