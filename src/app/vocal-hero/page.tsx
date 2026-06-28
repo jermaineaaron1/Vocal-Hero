@@ -19,6 +19,13 @@ const PART_COLOURS = ['#f472b6', '#fb923c', '#60a5fa', '#34d399']; // S A T B
 const PART_NAMES   = ['Soprano', 'Alto', 'Tenor', 'Bass'];
 const HOST_ID      = 'host';
 
+// Legacy game's palette/typography — kept consistent so the new app's menu
+// reads as the same "Vocal Hero," not an unrelated admin tool.
+const C = {
+  bg: '#0b1026', bg2: '#161a40', ink: '#f4f1e6', muted: '#9aa0c8',
+  gold: '#f0b429', goldSoft: '#ffd97a', line: '#2c3470',
+};
+
 type Screen = 'idle' | 'lobby' | 'playing' | 'ended';
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -132,26 +139,42 @@ export default function VocalHeroHostPage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+    <div
+      className="min-h-screen text-white flex flex-col"
+      style={{
+        background: `radial-gradient(120% 80% at 80% -10%, rgba(240,180,41,.18), transparent 55%), radial-gradient(120% 90% at 10% 110%, rgba(90,209,155,.12), transparent 50%), linear-gradient(160deg, ${C.bg}, ${C.bg2})`,
+        fontFamily: '"DM Mono", monospace',
+      }}
+    >
+      <link rel="preconnect" href="https://fonts.googleapis.com" />
+      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
       {/* Top bar */}
-      <header className="flex items-center gap-4 px-6 py-3 bg-gray-900 border-b border-gray-800 flex-shrink-0">
-        <span className="font-bold text-emerald-400 font-mono text-lg tracking-tight">🎤 Vocal Hero</span>
-        {song && <span className="text-gray-300 text-sm truncate flex-1">{song.title}{song.artist ? ` — ${song.artist}` : ''}</span>}
+      <header
+        className="flex items-center gap-4 px-6 py-3 flex-shrink-0"
+        style={{ background: 'rgba(255,255,255,.03)', borderBottom: `1px solid ${C.line}` }}
+      >
+        <span className="font-extrabold text-lg tracking-tight" style={{ fontFamily: '"Fraunces", serif', color: C.gold }}>
+          VOCAL<span style={{ color: C.ink }}>hero</span>
+        </span>
+        {song && <span className="text-sm truncate flex-1" style={{ color: C.muted }}>{song.title}{song.artist ? ` — ${song.artist}` : ''}</span>}
         {session && screen !== 'idle' && (
-          <span className="text-xs bg-gray-800 border border-gray-600 px-3 py-1 rounded-full font-mono tracking-widest">
-            Room: <strong className="text-yellow-300">{session.room_code}</strong>
+          <span className="text-xs px-3 py-1 rounded-full tracking-widest" style={{ background: 'rgba(255,255,255,.04)', border: `1px solid ${C.line}` }}>
+            Room: <strong style={{ color: C.goldSoft }}>{session.room_code}</strong>
           </span>
         )}
         {screen === 'playing' && song && (
-          <span className="text-xs text-gray-400 tabular-nums font-mono">
+          <span className="text-xs tabular-nums" style={{ color: C.muted }}>
             {fmtTime(elapsed)} / {fmtTime(song.duration)}
           </span>
         )}
         {screen !== 'idle' && (
           <button
             onClick={handleReset}
-            className="text-xs text-gray-500 hover:text-red-400 transition-colors ml-auto"
+            className="text-xs transition-colors ml-auto"
+            style={{ color: C.muted }}
+            onMouseEnter={e => (e.currentTarget.style.color = '#e05a6b')}
+            onMouseLeave={e => (e.currentTarget.style.color = C.muted)}
           >
             ✕ Exit
           </button>
@@ -185,37 +208,65 @@ export default function VocalHeroHostPage() {
 
 function IdleScreen({ songs, onPick }: { songs: Song[]; onPick: (s: Song) => void }) {
   return (
-    <div className="max-w-2xl mx-auto p-8">
-      <h2 className="text-xl font-semibold mb-6 text-gray-200">Pick a Song to Start</h2>
+    <div className="max-w-xl mx-auto px-6 py-12 flex flex-col items-center text-center">
+      <div className="font-extrabold tracking-tight" style={{ fontFamily: '"Fraunces", serif', lineHeight: 0.9 }}>
+        <span className="block" style={{ fontSize: 'clamp(40px,10vw,80px)', color: C.gold, fontStyle: 'italic' }}>VOCAL</span>
+        <span className="block" style={{ fontSize: 'clamp(40px,10vw,80px)', color: C.ink }}>hero</span>
+      </div>
+      <p className="mt-4 text-sm max-w-sm" style={{ color: C.muted }}>
+        Pick a song to start a session.
+      </p>
+
       {songs.length === 0 && (
-        <div className="text-gray-500 text-center py-16">
+        <div className="text-center py-16" style={{ color: C.muted }}>
           <p className="text-4xl mb-3">🎵</p>
           <p>No ready songs yet.</p>
-          <a href="/vocal-hero/library" className="text-emerald-400 hover:underline text-sm mt-2 block">
+          <a href="/vocal-hero/library" className="hover:underline text-sm mt-2 block" style={{ color: C.gold }}>
             → Go to Song Library to add one
           </a>
         </div>
       )}
-      <div className="space-y-3">
+
+      <div className="mt-8 flex flex-col gap-3 w-full" style={{ maxWidth: 440 }}>
         {songs.map(s => (
-          <button
+          <div
             key={s.id}
-            onClick={() => onPick(s)}
-            className="w-full text-left bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-emerald-600 rounded-xl p-4 transition-all group"
+            className="flex items-center justify-between gap-3 rounded-2xl px-4 py-3 transition-colors"
+            style={{ background: 'rgba(255,255,255,.04)', border: `1px solid ${C.line}` }}
           >
-            <div className="flex items-center gap-3">
+            <button
+              onClick={() => onPick(s)}
+              className="flex-1 min-w-0 text-left flex items-center gap-3 cursor-pointer"
+            >
               <span className="text-2xl">🎵</span>
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm group-hover:text-emerald-300 transition-colors">{s.title}</p>
-                <p className="text-gray-400 text-xs">{s.artist} · {fmtTime(s.duration)} · {s.prim_lang?.toUpperCase()}</p>
+                <p className="font-medium text-sm truncate" style={{ color: C.ink }}>{s.title}</p>
+                <p className="text-xs truncate" style={{ color: C.muted }}>{s.artist} · {fmtTime(s.duration)} · {s.prim_lang?.toUpperCase()}</p>
               </div>
-              <div className="flex gap-1">
+              <div className="flex gap-1 flex-shrink-0">
                 {(s.parts ?? []).slice(0, 4).map((_, i) => (
                   <span key={i} className="w-2 h-2 rounded-full" style={{ background: PART_COLOURS[i] }} />
                 ))}
               </div>
+            </button>
+            <div className="flex gap-2 flex-shrink-0">
+              <a
+                href={`/vocal-hero/library/${s.id}/edit`}
+                onClick={e => e.stopPropagation()}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                style={{ background: 'transparent', border: `1px solid ${C.gold}`, color: C.goldSoft }}
+              >
+                ✏ Edit
+              </a>
+              <button
+                onClick={() => onPick(s)}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                style={{ background: C.gold, color: C.bg }}
+              >
+                ▶ Play
+              </button>
             </div>
-          </button>
+          </div>
         ))}
       </div>
     </div>
