@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SongNote } from '@/lib/vocal-hero/types';
 
 // Shared SATB note lane — one full-width row per voice part, used by the
@@ -51,6 +51,28 @@ export function SatbLane({
   pitchHz, onTarget, playerCount, windowSec = 10, noteResults,
 }: SatbLaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [flash, setFlash] = useState<'hit' | 'miss' | null>(null);
+  const seenResultsRef = useRef<Set<string>>(new Set());
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Transient badge glow — fires once per NEW resolved note for this part.
+  // Runs only when noteResults changes, not on every animation frame.
+  useEffect(() => {
+    if (!noteResults) return;
+    const partNoteIds = new Set(notes.filter(n => n.part === partIndex).map(n => n.id));
+    for (const [noteId, hit] of Object.entries(noteResults)) {
+      if (!partNoteIds.has(noteId)) continue;
+      if (seenResultsRef.current.has(noteId)) continue;
+      seenResultsRef.current.add(noteId);
+      setFlash(hit ? 'hit' : 'miss');
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = setTimeout(() => setFlash(null), 700);
+    }
+  }, [noteResults, notes, partIndex]);
+
+  useEffect(() => {
+    return () => { if (flashTimerRef.current) clearTimeout(flashTimerRef.current); };
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -111,15 +133,17 @@ export function SatbLane({
       const isPast = n.end <= elapsed;
       const result = noteResults?.[n.id]; // true=hit, false=miss, undefined=unknown
 
+      // Misses vanish entirely — the badge glow (below) is the feedback.
+      if (isPast && result === false) return;
+
       let fill = colour + '70';   // upcoming — soft persistent glow
       let glow = colour;
       let glowBlur = 4;
       if (isCurr) {
         fill = colour; glow = colour; glowBlur = 16;
       } else if (isPast) {
-        if (result === true)      { fill = '#22c55e'; glow = '#22c55e'; glowBlur = 10; }
-        else if (result === false) { fill = '#3f3f46'; glow = 'transparent'; glowBlur = 0; }
-        else { fill = colour + '40'; glow = 'transparent'; glowBlur = 0; }
+        if (result === true) { fill = '#22c55e'; glow = '#22c55e'; glowBlur = 10; }
+        else                  { fill = colour + '40'; glow = 'transparent'; glowBlur = 0; }
       }
 
       ctx.save();
@@ -131,7 +155,7 @@ export function SatbLane({
       ctx.restore();
 
       if (n.lyric && drawW > 22) {
-        ctx.fillStyle = isPast && result === false ? '#9ca3af' : '#ffffff';
+        ctx.fillStyle = '#ffffff';
         ctx.font      = `bold ${Math.min(14, noteH - 4)}px system-ui,sans-serif`;
         ctx.fillText(n.lyric, drawX + 6, Math.max(2, y) + noteH - 5, drawW - 10);
       }
@@ -181,8 +205,13 @@ export function SatbLane({
       style={{ minHeight: 92, flex: 1 }}
     >
       <div
-        className="flex flex-col items-center justify-center flex-shrink-0 gap-0.5"
-        style={{ width: 72, background: colour + '22', borderRight: `1px solid ${colour}55` }}
+        className="flex flex-col items-center justify-center flex-shrink-0 gap-0.5 transition-shadow duration-150"
+        style={{
+          width: 72,
+          background: flash === 'hit' ? '#22c55e33' : flash === 'miss' ? '#ef444433' : colour + '22',
+          borderRight: `1px solid ${colour}55`,
+          boxShadow: flash === 'hit' ? 'inset 0 0 24px 4px #22c55e' : flash === 'miss' ? 'inset 0 0 24px 4px #ef4444' : 'none',
+        }}
       >
         <span className="text-lg font-bold" style={{ color: colour }}>{partName[0]}</span>
         <span className="text-[10px] uppercase tracking-wide" style={{ color: colour + 'cc' }}>{partName}</span>

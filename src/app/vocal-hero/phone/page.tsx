@@ -50,6 +50,8 @@ function PhonePageInner() {
   const [player,  setPlayer]  = useState<SessionPlayer | null>(null);
   const [error,   setError]   = useState('');
   const [joining, setJoining] = useState(false);
+  const [isSpectator, setIsSpectator] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   // Pitch / score state
   const [pitchHz,     setPitchHz]     = useState(0);
@@ -67,6 +69,7 @@ function PhonePageInner() {
   const pollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const unsubRef  = useRef<(() => void) | null>(null);
   const noteChannelRef = useRef<ReturnType<typeof openNoteResultsChannel> | null>(null);
+  const countdownRafRef = useRef<number | null>(null);
 
   // ── Cleanup ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -75,6 +78,7 @@ function PhonePageInner() {
       scoreRef.current?.stop();
       if (timerRef.current) clearInterval(timerRef.current);
       if (pollRef.current)  clearInterval(pollRef.current);
+      if (countdownRafRef.current) cancelAnimationFrame(countdownRafRef.current);
       unsubRef.current?.();
       if (noteChannelRef.current) supabase.removeChannel(noteChannelRef.current);
     };
@@ -138,11 +142,61 @@ function PhonePageInner() {
     }
   }
 
+  // ── Watch (spectator — no name/part, no player row, no mic) ──────────────
+  async function handleWatch() {
+    if (!room.trim()) { setError('Enter a room code'); return; }
+    setError('');
+    setJoining(true);
+
+    try {
+      const sess = await fetchSessionByCode(room);
+      if (!sess) { setError('Room not found. Check the code and try again.'); return; }
+      if (sess.status === 'ended') { setError('That game has already ended.'); return; }
+
+      const s = await fetchSong(sess.song_id);
+      if (!s) { setError('Song not found.'); return; }
+
+      setIsSpectator(true);
+      setSession(sess);
+      setSong(s);
+
+      unsubRef.current = subscribeToSession(sess.id, updated => setSession(updated));
+
+      setScreen(sess.status === 'playing' ? 'playing' : 'lobby');
+    } catch (err: unknown) {
+      setError(String(err));
+    } finally {
+      setJoining(false);
+    }
+  }
+
+  // ── Countdown lead-in — notes scroll in from the right, no scoring yet ───
+  function runCountdown(durationSec = 5): Promise<void> {
+    return new Promise(resolve => {
+      const start = performance.now();
+      const tick = () => {
+        const sec = (performance.now() - start) / 1000;
+        if (sec >= durationSec) {
+          setCountdown(null);
+          setElapsedHiRes(0);
+          countdownRafRef.current = null;
+          resolve();
+          return;
+        }
+        setElapsedHiRes(sec - durationSec); // ramps -5 → 0
+        setCountdown(Math.ceil(durationSec - sec));
+        countdownRafRef.current = requestAnimationFrame(tick);
+      };
+      countdownRafRef.current = requestAnimationFrame(tick);
+    });
+  }
+
   // ── Game start ────────────────────────────────────────────────────────────
   const handleGameStart = useCallback(async () => {
-    if (!song || !player) return;
-    const part: SatbPart = song.parts?.[partIdx] ?? song.parts?.[0];
-    if (!part) return;
+    if (!song) return;
+    if (!isSpectator && !player) return;
+    const part: SatbPart | undefined = isSpectator ? undefined : (song.parts?.[partIdx] ?? song.parts?.[0]);
+    if (!isSpectator && !part) return;
 
     setScreen('playing');
     setElapsed(0);
@@ -153,10 +207,21 @@ function PhonePageInner() {
     // Open the note-results channel — sends this player's own hit/miss
     // results to the host (and anyone else listening), and also receives
     // others' results so other lanes can show hit/miss in "All Voices".
+    // Spectators only ever receive (they never call .send on it).
     const noteChannel = openNoteResultsChannel(session!.id, r =>
       setNoteResults(prev => ({ ...prev, [r.noteId]: r.hit }))
     );
     noteChannelRef.current = noteChannel;
+
+    // 5-second countdown — notes scroll in from the right, no scoring/mic yet.
+    await runCountdown();
+
+    if (isSpectator) {
+      // Nothing else to start — lanes already render from elapsedHiRes/noteResults.
+      timerRef.current = setInterval(() => setElapsed(prev => prev + 1), 1000);
+      return;
+    }
+    if (!part || !player) return; // re-narrow for TS — already guaranteed true here
 
     // Start score engine
     const score = new ScoreEngine({
@@ -217,13 +282,16 @@ function PhonePageInner() {
     timerRef.current = setInterval(() => {
       setElapsed(prev => prev + 1);
     }, 1000);
-  }, [song, player, partIdx, session]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [song, player, partIdx, session, isSpectator]);
 
   // ── Game end ──────────────────────────────────────────────────────────────
   const handleGameEnd = useCallback(async () => {
     pitchRef.current?.stop();
     pitchRef.current = null;
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (countdownRafRef.current) { cancelAnimationFrame(countdownRafRef.current); countdownRafRef.current = null; }
+    setCountdown(null);
     if (noteChannelRef.current) { supabase.removeChannel(noteChannelRef.current); noteChannelRef.current = null; }
     await scoreRef.current?.stop();
     scoreRef.current = null;
@@ -232,9 +300,11 @@ function PhonePageInner() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  if (screen === 'join')    return <JoinScreen room={room} setRoom={setRoom} name={name} setName={setName} partIdx={partIdx} setPartIdx={setPartIdx} onSubmit={handleJoin} error={error} joining={joining} />;
-  if (screen === 'lobby')   return <LobbyScreen song={song} partIdx={partIdx} />;
-  if (screen === 'playing') return (
+  if (screen === 'join')    return <JoinScreen room={room} setRoom={setRoom} name={name} setName={setName} partIdx={partIdx} setPartIdx={setPartIdx} onSubmit={handleJoin} onWatch={handleWatch} error={error} joining={joining} />;
+  if (screen === 'lobby')   return <LobbyScreen song={song} partIdx={partIdx} isSpectator={isSpectator} />;
+  if (screen === 'playing') return isSpectator ? (
+    <SpectatorScreen song={song} elapsed={elapsedHiRes} noteResults={noteResults} countdown={countdown} />
+  ) : (
     <PlayingScreen
       song={song}
       partIdx={partIdx}
@@ -246,6 +316,7 @@ function PhonePageInner() {
       localScore={localScore}
       micAllowed={micAllowed}
       noteResults={noteResults}
+      countdown={countdown}
     />
   );
   if (screen === 'ended')   return <EndedScreen localScore={localScore} partIdx={partIdx} playerName={player?.player_name ?? ''} />;
@@ -254,11 +325,12 @@ function PhonePageInner() {
 
 // ── JoinScreen ────────────────────────────────────────────────────────────
 
-function JoinScreen({ room, setRoom, name, setName, partIdx, setPartIdx, onSubmit, error, joining }: {
+function JoinScreen({ room, setRoom, name, setName, partIdx, setPartIdx, onSubmit, onWatch, error, joining }: {
   room: string; setRoom: (v: string) => void;
   name: string; setName: (v: string) => void;
   partIdx: number; setPartIdx: (v: number) => void;
   onSubmit: (e: React.FormEvent) => void;
+  onWatch: () => void;
   error: string; joining: boolean;
 }) {
   return (
@@ -324,6 +396,15 @@ function JoinScreen({ room, setRoom, name, setName, partIdx, setPartIdx, onSubmi
             {joining ? 'Joining…' : 'Join Game'}
           </button>
         </form>
+
+        <button
+          type="button"
+          onClick={onWatch}
+          disabled={joining}
+          className="w-full mt-3 text-gray-500 hover:text-gray-300 disabled:opacity-50 text-sm transition-colors"
+        >
+          👀 Just want to watch?
+        </button>
       </div>
     </div>
   );
@@ -331,16 +412,83 @@ function JoinScreen({ room, setRoom, name, setName, partIdx, setPartIdx, onSubmi
 
 // ── LobbyScreen (phone) ────────────────────────────────────────────────────
 
-function LobbyScreen({ song, partIdx }: { song: Song | null; partIdx: number }) {
+function LobbyScreen({ song, partIdx, isSpectator }: { song: Song | null; partIdx: number; isSpectator: boolean }) {
   return (
     <div className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6 text-center">
-      <div className="animate-pulse text-5xl mb-4">🎵</div>
+      <div className="animate-pulse text-5xl mb-4">{isSpectator ? '👀' : '🎵'}</div>
       <h2 className="text-xl font-bold text-emerald-400 mb-2">You&apos;re in!</h2>
       {song && <p className="text-gray-300 font-semibold">{song.title}</p>}
-      <p className="text-gray-500 text-sm mt-1">
-        You&apos;re singing <span style={{ color: PART_COLOURS[partIdx] }} className="font-bold">{PART_NAMES[partIdx]}</span>
-      </p>
+      {isSpectator ? (
+        <p className="text-gray-500 text-sm mt-1">Watching — not singing a part</p>
+      ) : (
+        <p className="text-gray-500 text-sm mt-1">
+          You&apos;re singing <span style={{ color: PART_COLOURS[partIdx] }} className="font-bold">{PART_NAMES[partIdx]}</span>
+        </p>
+      )}
       <p className="text-gray-600 text-sm mt-6">Waiting for the host to start…</p>
+    </div>
+  );
+}
+
+// ── CountdownOverlay ──────────────────────────────────────────────────────
+
+function CountdownOverlay({ countdown }: { countdown: number | null }) {
+  if (countdown === null) return null;
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-50">
+      <span className="text-8xl font-extrabold" style={{ color: '#f0b429' }}>
+        {countdown > 0 ? countdown : 'Sing!'}
+      </span>
+    </div>
+  );
+}
+
+// ── SpectatorScreen (phone) — same all-voices view the host shows, read-only ──
+
+function SpectatorScreen({
+  song, elapsed, noteResults, countdown,
+}: {
+  song: Song | null;
+  elapsed: number;
+  noteResults: Record<string, boolean>;
+  countdown: number | null;
+}) {
+  const progress = song ? elapsed / song.duration : 0;
+  const sopranoNote = (song?.notes ?? []).find(n => n.part === 0 && elapsed >= n.start && elapsed < n.end && n.lyric);
+
+  return (
+    <div className="min-h-screen bg-gray-950 text-white flex flex-col p-4 gap-3 relative">
+      <CountdownOverlay countdown={countdown} />
+
+      <div className="text-center">
+        <p className="text-xs text-gray-500">👀 Watching</p>
+        <p className="text-sm font-bold text-gray-200">{song?.title}</p>
+      </div>
+
+      <div className="w-full bg-gray-800 rounded-full h-1">
+        <div className="h-1 rounded-full bg-emerald-500 transition-all" style={{ width: `${progress * 100}%` }} />
+      </div>
+
+      <div className="text-center min-h-[2rem] flex items-center justify-center">
+        {sopranoNote
+          ? <p className="text-lg font-bold leading-snug">{sopranoNote.lyric}</p>
+          : <p className="text-gray-600 text-sm">♪</p>
+        }
+      </div>
+
+      <div className="flex flex-col gap-2 flex-1 min-h-0">
+        {[0, 1, 2, 3].map(i => (
+          <SatbLane
+            key={i}
+            partIndex={i}
+            partName={PART_NAMES[i]}
+            colour={PART_COLOURS[i]}
+            elapsed={elapsed}
+            notes={song?.notes ?? []}
+            noteResults={noteResults}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -349,7 +497,7 @@ function LobbyScreen({ song, partIdx }: { song: Song | null; partIdx: number }) 
 
 function PlayingScreen({
   song, partIdx, elapsed, elapsedHiRes, pitchHz,
-  targetNorm, centsDiff, localScore, micAllowed, noteResults,
+  targetNorm, centsDiff, localScore, micAllowed, noteResults, countdown,
 }: {
   song: Song | null;
   partIdx: number;
@@ -361,6 +509,7 @@ function PlayingScreen({
   localScore: number;
   micAllowed: boolean | null;
   noteResults: Record<string, boolean>;
+  countdown: number | null;
 }) {
   const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine');
   const colour    = PART_COLOURS[partIdx];
@@ -375,7 +524,8 @@ function PlayingScreen({
   const lyric = currentNote?.lyric ?? null;
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col p-4 gap-3">
+    <div className="min-h-screen bg-gray-950 text-white flex flex-col p-4 gap-3 relative">
+      <CountdownOverlay countdown={countdown} />
 
       {/* Header */}
       <div className="flex items-center justify-between">

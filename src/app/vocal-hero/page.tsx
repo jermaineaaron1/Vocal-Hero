@@ -41,6 +41,7 @@ export default function VocalHeroHostPage() {
   const [elapsed,  setElapsed]  = useState(0);
   const [elapsedHiRes, setElapsedHiRes] = useState(0); // rAF-driven, for smooth lane scrolling
   const [noteResults, setNoteResults]   = useState<Record<string, boolean>>({});
+  const [countdown, setCountdown] = useState<number | null>(null);
   const [error,    setError]    = useState('');
 
   const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -48,6 +49,7 @@ export default function VocalHeroHostPage() {
   const unsubRef   = useRef<(() => void)[]>([]);
   const rafRef     = useRef<number | null>(null);
   const playStartRef = useRef(0);
+  const countdownRafRef = useRef<number | null>(null);
 
   // ── Load songs on mount ──────────────────────────────────────────────────
   useEffect(() => {
@@ -63,6 +65,7 @@ export default function VocalHeroHostPage() {
       if (timerRef.current) clearInterval(timerRef.current);
       if (pollRef.current)  clearInterval(pollRef.current);
       if (rafRef.current)   cancelAnimationFrame(rafRef.current);
+      if (countdownRafRef.current) cancelAnimationFrame(countdownRafRef.current);
     };
   }, []);
 
@@ -104,6 +107,27 @@ export default function VocalHeroHostPage() {
     }
   }
 
+  // 5-second countdown lead-in — notes scroll in from the right, no scoring yet.
+  function runCountdown(durationSec = 5): Promise<void> {
+    return new Promise(resolve => {
+      const start = performance.now();
+      const tick = () => {
+        const sec = (performance.now() - start) / 1000;
+        if (sec >= durationSec) {
+          setCountdown(null);
+          setElapsedHiRes(0);
+          countdownRafRef.current = null;
+          resolve();
+          return;
+        }
+        setElapsedHiRes(sec - durationSec); // ramps -5 → 0
+        setCountdown(Math.ceil(durationSec - sec));
+        countdownRafRef.current = requestAnimationFrame(tick);
+      };
+      countdownRafRef.current = requestAnimationFrame(tick);
+    });
+  }
+
   async function handleStart() {
     if (!session) return;
     setError('');
@@ -112,6 +136,8 @@ export default function VocalHeroHostPage() {
       setElapsed(0);
       setElapsedHiRes(0);
       setScreen('playing');
+
+      await runCountdown();
 
       // Elapsed timer — drives the progress bar + end-of-song check, unchanged
       timerRef.current = setInterval(() => {
@@ -142,6 +168,8 @@ export default function VocalHeroHostPage() {
     if (!session) return;
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     if (rafRef.current)   { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    if (countdownRafRef.current) { cancelAnimationFrame(countdownRafRef.current); countdownRafRef.current = null; }
+    setCountdown(null);
     try { await endSession(session.id); } catch { /* ignore */ }
     setPlayers(await fetchPlayers(session.id));
     setScreen('ended');
@@ -156,6 +184,7 @@ export default function VocalHeroHostPage() {
     setElapsed(0);
     setElapsedHiRes(0);
     setNoteResults({});
+    setCountdown(null);
     setScreen('idle');
   }
 
@@ -223,6 +252,7 @@ export default function VocalHeroHostPage() {
             elapsed={elapsed}
             elapsedHiRes={elapsedHiRes}
             noteResults={noteResults}
+            countdown={countdown}
             onEnd={handleEnd}
           />
         )}
@@ -390,13 +420,14 @@ function extractYtId(url: string): string | null {
 // ── PlayingScreen ──────────────────────────────────────────────────────────
 
 function PlayingScreen({
-  song, players, elapsed, elapsedHiRes, noteResults, onEnd,
+  song, players, elapsed, elapsedHiRes, noteResults, countdown, onEnd,
 }: {
   song: Song;
   players: SessionPlayer[];
   elapsed: number;
   elapsedHiRes: number;
   noteResults: Record<string, boolean>;
+  countdown: number | null;
   onEnd: () => void;
 }) {
   const progress = song.duration > 0 ? elapsed / song.duration : 0;
@@ -407,7 +438,14 @@ function PlayingScreen({
   const sopranoNote = (song.notes ?? []).find(n => n.part === 0 && elapsedHiRes >= n.start && elapsedHiRes < n.end && n.lyric);
 
   return (
-    <div className="flex flex-col h-full p-4 gap-4">
+    <div className="flex flex-col h-full p-4 gap-4 relative">
+      {countdown !== null && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-50">
+          <span className="text-9xl font-extrabold" style={{ color: '#f0b429' }}>
+            {countdown > 0 ? countdown : 'Sing!'}
+          </span>
+        </div>
+      )}
 
       {/* YouTube mini player — must be visible for autoplay to work */}
       {videoId && (
