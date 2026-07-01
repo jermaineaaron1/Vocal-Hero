@@ -156,6 +156,19 @@ export async function endSession(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+export async function setSessionPaused(id: string, paused: boolean): Promise<void> {
+  const { error } = await supabase
+    .from('vh_game_sessions')
+    .update({ paused })
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function restartSession(id: string): Promise<void> {
+  const { error } = await supabase.rpc('vh_bump_restart', { s_id: id });
+  if (error) throw new Error(error.message);
+}
+
 // ── Players ────────────────────────────────────────────────────────────────
 
 export async function joinSession(

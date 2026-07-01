@@ -10,11 +10,13 @@ import {
   joinSession,
   subscribeToSession,
   openNoteResultsChannel,
+  setSessionPaused,
+  restartSession,
 } from '@/lib/vocal-hero/supabaseClient';
 import { PitchEngine } from '@/lib/vocal-hero/pitchEngine';
 import { ScoreEngine, CENT_TOLERANCE } from '@/lib/vocal-hero/scoreEngine';
 import { SatbLane } from '../SatbLane';
-import type { Song, GameSession, SessionPlayer, SatbPart } from '@/lib/vocal-hero/types';
+import type { Song, GameSession, SessionPlayer, SatbPart, SongNote } from '@/lib/vocal-hero/types';
 
 const PART_NAMES   = ['Soprano', 'Alto', 'Tenor', 'Bass'];
 const PART_COLOURS = ['#f472b6', '#fb923c', '#60a5fa', '#34d399'];
@@ -54,22 +56,44 @@ function PhonePageInner() {
   const [countdown, setCountdown] = useState<number | null>(null);
 
   // Pitch / score state
-  const [pitchHz,     setPitchHz]     = useState(0);
-  const [targetNorm,  setTargetNorm]  = useState(0);
-  const [localScore,  setLocalScore]  = useState(0);
-  const [centsDiff,   setCentsDiff]   = useState(0);
-  const [elapsed,     setElapsed]     = useState(0);
-  const [elapsedHiRes, setElapsedHiRes] = useState(0); // rAF-resolution, for smooth lane scrolling
-  const [noteResults, setNoteResults] = useState<Record<string, boolean>>({});
-  const [micAllowed,  setMicAllowed]  = useState<boolean | null>(null);
+  const [pitchHz,      setPitchHz]      = useState(0);
+  const [targetNorm,   setTargetNorm]   = useState(0);
+  const [localScore,   setLocalScore]   = useState(0);
+  const [centsDiff,    setCentsDiff]    = useState(0);
+  const [elapsed,      setElapsed]      = useState(0);
+  const [elapsedHiRes, setElapsedHiRes] = useState(0);
+  const [noteResults,  setNoteResults]  = useState<Record<string, boolean>>({});
+  const [micAllowed,   setMicAllowed]   = useState<boolean | null>(null);
 
-  const pitchRef  = useRef<PitchEngine | null>(null);
-  const scoreRef  = useRef<ScoreEngine | null>(null);
-  const timerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
-  const unsubRef  = useRef<(() => void) | null>(null);
-  const noteChannelRef = useRef<ReturnType<typeof openNoteResultsChannel> | null>(null);
-  const countdownRafRef = useRef<number | null>(null);
+  const pitchRef          = useRef<PitchEngine | null>(null);
+  const scoreRef          = useRef<ScoreEngine | null>(null);
+  const timerRef          = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef           = useRef<ReturnType<typeof setInterval> | null>(null);
+  const unsubRef          = useRef<(() => void) | null>(null);
+  const noteChannelRef    = useRef<ReturnType<typeof openNoteResultsChannel> | null>(null);
+  const countdownRafRef   = useRef<number | null>(null);
+
+  // Pause state
+  const pausedRef         = useRef(false);
+  const pauseAccumMsRef   = useRef(0);   // total wall-clock ms spent paused
+  const pauseWallStartRef = useRef(0);   // wall time when current pause began
+  const lastTimestampRef  = useRef(0);   // last AudioContext timestamp seen in onPitch
+
+  // Restart state
+  const lastRestartSeqRef = useRef<number | undefined>(undefined);
+
+  // Stable refs for callbacks
+  const songRef       = useRef<Song | null>(null);
+  const partIdxRef    = useRef(0);
+  const sessionRef    = useRef<GameSession | null>(null);
+  const isSpectatorRef = useRef(false);
+  const playerRef     = useRef<SessionPlayer | null>(null);
+
+  useEffect(() => { songRef.current = song; }, [song]);
+  useEffect(() => { partIdxRef.current = partIdx; }, [partIdx]);
+  useEffect(() => { sessionRef.current = session; }, [session]);
+  useEffect(() => { isSpectatorRef.current = isSpectator; }, [isSpectator]);
+  useEffect(() => { playerRef.current = player; }, [player]);
 
   // ── Cleanup ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -84,7 +108,7 @@ function PhonePageInner() {
     };
   }, []);
 
-  // ── Poll session status while in lobby (Realtime fallback) ───────────────
+  // ── Poll session status while in lobby ───────────────────────────────────
   useEffect(() => {
     if (screen === 'lobby' && session) {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -110,6 +134,53 @@ function PhonePageInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.status]);
 
+  // ── Pause-reaction ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!session || screen !== 'playing') return;
+    if (session.paused) {
+      pausedRef.current = true;
+      pauseWallStartRef.current = performance.now();
+    } else if (pausedRef.current) {
+      // Resume — accumulate the wall time spent paused so we can subtract it
+      // from the AudioContext clock to keep elapsedHiRes continuous.
+      pausedRef.current = false;
+      pauseAccumMsRef.current += performance.now() - pauseWallStartRef.current;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.paused, screen]);
+
+  // ── Restart-reaction ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const seq = session?.restart_seq;
+    if (seq === undefined) return;
+    if (lastRestartSeqRef.current === undefined) {
+      lastRestartSeqRef.current = seq;
+      return;
+    }
+    if (seq <= lastRestartSeqRef.current) return;
+    lastRestartSeqRef.current = seq;
+
+    // Stop everything and restart
+    pitchRef.current?.stop(); pitchRef.current = null;
+    scoreRef.current?.stop(); scoreRef.current = null;
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (countdownRafRef.current) { cancelAnimationFrame(countdownRafRef.current); countdownRafRef.current = null; }
+    if (noteChannelRef.current) { supabase.removeChannel(noteChannelRef.current); noteChannelRef.current = null; }
+
+    // Reset pause/time accumulators
+    pausedRef.current = false;
+    pauseAccumMsRef.current = 0;
+    lastTimestampRef.current = 0;
+
+    // Reset UI state
+    setElapsed(0); setElapsedHiRes(0); setLocalScore(0); setNoteResults({});
+    setPitchHz(0); setTargetNorm(0); setCentsDiff(0); setCountdown(null);
+
+    // Re-enter game flow
+    handleGameStart();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.restart_seq]);
+
   // ── Join ─────────────────────────────────────────────────────────────────
   async function handleJoin(e: React.FormEvent) {
     e.preventDefault();
@@ -131,7 +202,6 @@ function PhonePageInner() {
       setSong(s);
       setPlayer(p);
 
-      // Subscribe to session status changes
       unsubRef.current = subscribeToSession(sess.id, updated => setSession(updated));
 
       setScreen(sess.status === 'playing' ? 'playing' : 'lobby');
@@ -142,7 +212,7 @@ function PhonePageInner() {
     }
   }
 
-  // ── Watch (spectator — no name/part, no player row, no mic) ──────────────
+  // ── Watch (spectator) ─────────────────────────────────────────────────────
   async function handleWatch() {
     if (!room.trim()) { setError('Enter a room code'); return; }
     setError('');
@@ -170,7 +240,38 @@ function PhonePageInner() {
     }
   }
 
-  // ── Countdown lead-in — notes scroll in from the right, no scoring yet ───
+  // ── Piano preview — plays first 3 notes of the singer's part as piano tones ──
+  function playPreviewNotes(pIdx: number, notes: SongNote[]) {
+    const partNotes = notes
+      .filter(n => n.part === pIdx)
+      .slice()
+      .sort((a, b) => a.start - b.start)
+      .slice(0, 3);
+    if (partNotes.length === 0) return;
+
+    try {
+      const ctx = new AudioContext();
+      partNotes.forEach((note, i) => {
+        const hz   = 440 * Math.pow(2, (note.midi - 69) / 12);
+        const when = ctx.currentTime + i * 0.8;
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = hz;
+        gain.gain.setValueAtTime(0.25, when);
+        gain.gain.exponentialRampToValueAtTime(0.001, when + 0.6);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(when);
+        osc.stop(when + 0.65);
+      });
+      // AudioContext self-GCs once all oscillators stop
+    } catch {
+      // Non-fatal — preview is best-effort (blocked by browser policy, etc.)
+    }
+  }
+
+  // ── Countdown lead-in ────────────────────────────────────────────────────
   function runCountdown(durationSec = 5): Promise<void> {
     return new Promise(resolve => {
       const start = performance.now();
@@ -183,7 +284,7 @@ function PhonePageInner() {
           resolve();
           return;
         }
-        setElapsedHiRes(sec - durationSec); // ramps -5 → 0
+        setElapsedHiRes(sec - durationSec);
         setCountdown(Math.ceil(durationSec - sec));
         countdownRafRef.current = requestAnimationFrame(tick);
       };
@@ -193,10 +294,16 @@ function PhonePageInner() {
 
   // ── Game start ────────────────────────────────────────────────────────────
   const handleGameStart = useCallback(async () => {
+    const song      = songRef.current;
+    const player    = playerRef.current;
+    const pIdx      = partIdxRef.current;
+    const spectator = isSpectatorRef.current;
+    const sess      = sessionRef.current;
+
     if (!song) return;
-    if (!isSpectator && !player) return;
-    const part: SatbPart | undefined = isSpectator ? undefined : (song.parts?.[partIdx] ?? song.parts?.[0]);
-    if (!isSpectator && !part) return;
+    if (!spectator && !player) return;
+    const part: SatbPart | undefined = spectator ? undefined : (song.parts?.[pIdx] ?? song.parts?.[0]);
+    if (!spectator && !part) return;
 
     setScreen('playing');
     setElapsed(0);
@@ -204,39 +311,40 @@ function PhonePageInner() {
     setLocalScore(0);
     setNoteResults({});
 
-    // Open the note-results channel — sends this player's own hit/miss
-    // results to the host (and anyone else listening), and also receives
-    // others' results so other lanes can show hit/miss in "All Voices".
-    // Spectators only ever receive (they never call .send on it).
-    const noteChannel = openNoteResultsChannel(session!.id, r =>
+    // Open note-results broadcast channel (spectators receive only, singers send+receive)
+    const noteChannel = openNoteResultsChannel(sess!.id, r =>
       setNoteResults(prev => ({ ...prev, [r.noteId]: r.hit }))
     );
     noteChannelRef.current = noteChannel;
 
-    // 5-second countdown — notes scroll in from the right, no scoring/mic yet.
+    // Piano preview fires at countdown start (before scoring/mic starts)
+    if (!spectator) {
+      playPreviewNotes(pIdx, song.notes ?? []);
+    }
+
+    // 5-second countdown — notes scroll in from the right, no scoring yet
     await runCountdown();
 
-    if (isSpectator) {
-      // Nothing else to start — lanes already render from elapsedHiRes/noteResults.
+    if (spectator) {
       timerRef.current = setInterval(() => setElapsed(prev => prev + 1), 1000);
       return;
     }
-    if (!part || !player) return; // re-narrow for TS — already guaranteed true here
+    if (!part || !player) return;
 
     // Start score engine
     const score = new ScoreEngine({
       part,
-      partIndex:    partIdx,
+      partIndex:    pIdx,
       notes:        song.notes ?? [],
       songDuration: song.duration,
       playerId:     player.id,
-      sessionId:    session!.id,
+      sessionId:    sess!.id,
       difficulty:   'medium',
       onScoreUpdate: (_, total) => setLocalScore(total),
       onNoteResult: (result) => {
         const hit = result.points > 0;
         setNoteResults(prev => ({ ...prev, [result.noteId]: hit }));
-        noteChannel.send({ type: 'broadcast', event: 'note_result', payload: { partIndex: partIdx, noteId: result.noteId, hit } });
+        noteChannel.send({ type: 'broadcast', event: 'note_result', payload: { partIndex: pIdx, noteId: result.noteId, hit } });
       },
     });
     scoreRef.current = score;
@@ -246,25 +354,28 @@ function PhonePageInner() {
     try {
       const engine = new PitchEngine({
         onPitch: ({ frequency, confidence, timestamp }) => {
-          const part = song.parts?.[partIdx];
-          if (!part) return;
+          lastTimestampRef.current = timestamp;
+
+          // While paused, freeze all updates — scoring and elapsed stop advancing
+          if (pausedRef.current) return;
+
+          // Subtract accumulated pause duration to keep elapsedHiRes continuous
+          const adjusted = timestamp - pauseAccumMsRef.current / 1000;
 
           setPitchHz(frequency);
           setMicAllowed(true);
+          setElapsedHiRes(adjusted);
 
-          // Use the high-resolution AudioContext-clock timestamp (not the
-          // 1Hz `elapsed` UI state) for scoring — onset-timing accuracy
-          // needs sub-second precision. Also drives smooth lane scrolling,
-          // since this callback already fires every animation frame.
-          setElapsedHiRes(timestamp);
+          const currentPart = songRef.current?.parts?.[pIdx];
+          if (!currentPart) return;
 
-          const tgt = scoreRef.current?.targetNormAt(timestamp) ?? 0;
+          const tgt = scoreRef.current?.targetNormAt(adjusted) ?? 0;
           setTargetNorm(tgt);
-          const tgtHz = PitchEngine.denormalise(tgt, part.rangeMin, part.rangeMax);
+          const tgtHz = PitchEngine.denormalise(tgt, currentPart.rangeMin, currentPart.rangeMax);
           setCentsDiff(PitchEngine.centsDiff(frequency, tgtHz));
 
           if (confidence > 0.85) {
-            scoreRef.current?.scorePitch(frequency, timestamp);
+            scoreRef.current?.scorePitch(frequency, adjusted);
           }
         },
         confidenceThreshold: 0.85,
@@ -277,13 +388,12 @@ function PhonePageInner() {
       setMicAllowed(false);
     }
 
-    // Elapsed timer — on-screen seconds display only, unchanged. Lane
-    // scrolling now uses elapsedHiRes (set every animation frame above).
     timerRef.current = setInterval(() => {
       setElapsed(prev => prev + 1);
     }, 1000);
+  // handleGameStart reads stable refs only — no reactive deps needed
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [song, player, partIdx, session, isSpectator]);
+  }, []);
 
   // ── Game end ──────────────────────────────────────────────────────────────
   const handleGameEnd = useCallback(async () => {
@@ -298,12 +408,35 @@ function PhonePageInner() {
     setScreen('ended');
   }, []);
 
+  // ── Pause/Restart controls ────────────────────────────────────────────────
+  async function handlePauseToggle() {
+    if (!session) return;
+    try {
+      await setSessionPaused(session.id, !session.paused);
+    } catch { /* ignore */ }
+  }
+
+  async function handleRestart() {
+    if (!session) return;
+    try {
+      await restartSession(session.id);
+    } catch { /* ignore */ }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (screen === 'join')    return <JoinScreen room={room} setRoom={setRoom} name={name} setName={setName} partIdx={partIdx} setPartIdx={setPartIdx} onSubmit={handleJoin} onWatch={handleWatch} error={error} joining={joining} />;
   if (screen === 'lobby')   return <LobbyScreen song={song} partIdx={partIdx} isSpectator={isSpectator} />;
   if (screen === 'playing') return isSpectator ? (
-    <SpectatorScreen song={song} elapsed={elapsedHiRes} noteResults={noteResults} countdown={countdown} />
+    <SpectatorScreen
+      song={song}
+      elapsed={elapsedHiRes}
+      noteResults={noteResults}
+      countdown={countdown}
+      isPaused={!!session?.paused}
+      onPause={handlePauseToggle}
+      onRestart={handleRestart}
+    />
   ) : (
     <PlayingScreen
       song={song}
@@ -317,6 +450,9 @@ function PhonePageInner() {
       micAllowed={micAllowed}
       noteResults={noteResults}
       countdown={countdown}
+      isPaused={!!session?.paused}
+      onPause={handlePauseToggle}
+      onRestart={handleRestart}
     />
   );
   if (screen === 'ended')   return <EndedScreen localScore={localScore} partIdx={partIdx} playerName={player?.player_name ?? ''} />;
@@ -434,8 +570,12 @@ function LobbyScreen({ song, partIdx, isSpectator }: { song: Song | null; partId
 
 function CountdownOverlay({ countdown }: { countdown: number | null }) {
   if (countdown === null) return null;
+  const isLight = (countdown ?? 0) <= 3;
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-50">
+    <div
+      className="absolute inset-0 flex items-center justify-center z-50"
+      style={{ background: isLight ? 'transparent' : 'rgba(0,0,0,0.6)' }}
+    >
       <span className="text-8xl font-extrabold" style={{ color: '#f0b429' }}>
         {countdown > 0 ? countdown : 'Sing!'}
       </span>
@@ -443,15 +583,44 @@ function CountdownOverlay({ countdown }: { countdown: number | null }) {
   );
 }
 
-// ── SpectatorScreen (phone) — same all-voices view the host shows, read-only ──
+// ── Game controls row — shared between PlayingScreen and SpectatorScreen ──
+
+function GameControls({ isPaused, onPause, onRestart }: {
+  isPaused: boolean;
+  onPause: () => void;
+  onRestart: () => void;
+}) {
+  return (
+    <div className="flex gap-2 justify-center">
+      <button
+        onClick={onPause}
+        className="text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+        style={{ background: isPaused ? '#16a34a' : '#374151', color: '#fff', border: '1px solid #4b5563' }}
+      >
+        {isPaused ? '▶ Resume' : '⏸ Pause'}
+      </button>
+      <button
+        onClick={onRestart}
+        className="text-sm font-semibold px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white border border-gray-600 transition-colors"
+      >
+        ↺ Restart
+      </button>
+    </div>
+  );
+}
+
+// ── SpectatorScreen (phone) ────────────────────────────────────────────────
 
 function SpectatorScreen({
-  song, elapsed, noteResults, countdown,
+  song, elapsed, noteResults, countdown, isPaused, onPause, onRestart,
 }: {
   song: Song | null;
   elapsed: number;
   noteResults: Record<string, boolean>;
   countdown: number | null;
+  isPaused: boolean;
+  onPause: () => void;
+  onRestart: () => void;
 }) {
   const progress = song ? elapsed / song.duration : 0;
   const sopranoNote = (song?.notes ?? []).find(n => n.part === 0 && elapsed >= n.start && elapsed < n.end && n.lyric);
@@ -460,9 +629,12 @@ function SpectatorScreen({
     <div className="min-h-screen bg-gray-950 text-white flex flex-col p-4 gap-3 relative">
       <CountdownOverlay countdown={countdown} />
 
-      <div className="text-center">
-        <p className="text-xs text-gray-500">👀 Watching</p>
-        <p className="text-sm font-bold text-gray-200">{song?.title}</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs text-gray-500">👀 Watching</p>
+          <p className="text-sm font-bold text-gray-200">{song?.title}</p>
+        </div>
+        <GameControls isPaused={isPaused} onPause={onPause} onRestart={onRestart} />
       </div>
 
       <div className="w-full bg-gray-800 rounded-full h-1">
@@ -498,6 +670,7 @@ function SpectatorScreen({
 function PlayingScreen({
   song, partIdx, elapsed, elapsedHiRes, pitchHz,
   targetNorm, centsDiff, localScore, micAllowed, noteResults, countdown,
+  isPaused, onPause, onRestart,
 }: {
   song: Song | null;
   partIdx: number;
@@ -510,6 +683,9 @@ function PlayingScreen({
   micAllowed: boolean | null;
   noteResults: Record<string, boolean>;
   countdown: number | null;
+  isPaused: boolean;
+  onPause: () => void;
+  onRestart: () => void;
 }) {
   const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine');
   const colour    = PART_COLOURS[partIdx];
@@ -517,11 +693,12 @@ function PlayingScreen({
   const absCents  = Math.abs(centsDiff);
   const onTarget  = pitchHz > 0 && absCents < tolerance;
   const progress  = song ? elapsed / song.duration : 0;
-  const part      = song?.parts?.[partIdx];
 
-  // Current lyric — only from manually-placed notes in the piano roll
   const currentNote = (song?.notes ?? []).find(n => n.part === partIdx && elapsedHiRes >= n.start && elapsedHiRes < n.end && n.lyric);
   const lyric = currentNote?.lyric ?? null;
+
+  // targetNorm is in scope but only used for the tuning bar indirectly via centsDiff
+  void targetNorm;
 
   return (
     <div className="min-h-screen bg-gray-950 text-white flex flex-col p-4 gap-3 relative">
@@ -538,6 +715,9 @@ function PlayingScreen({
           <p className="text-xs text-gray-500">pts</p>
         </div>
       </div>
+
+      {/* Game controls */}
+      <GameControls isPaused={isPaused} onPause={onPause} onRestart={onRestart} />
 
       {/* My Part / All Voices toggle */}
       <div className="flex items-center gap-1 bg-gray-900 border border-gray-700 rounded-full p-0.5 self-center">
@@ -568,7 +748,7 @@ function PlayingScreen({
         }
       </div>
 
-      {/* Main game view — same lane renderer everywhere, just one lane vs four */}
+      {/* Main game view */}
       {viewMode === 'mine' ? (
         <div className="flex-1 min-h-0">
           <SatbLane
@@ -606,7 +786,6 @@ function PlayingScreen({
           {pitchHz > 0 ? PitchEngine.toNoteName(pitchHz) : '—'}
         </p>
 
-        {/* Tuning bar */}
         {pitchHz > 0 && (
           <div className="flex items-center gap-2">
             <span className="text-gray-600 text-xs">♭</span>

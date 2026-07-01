@@ -146,3 +146,22 @@ create policy vh_high_scores_public_all on vh_high_scores for all using (true) w
 
 drop policy if exists vh_recordings_public_all on vh_recordings;
 create policy vh_recordings_public_all on vh_recordings for all using (true) with check (true);
+
+-- Phase 7: Cross-device pause/restart state persisted in the session row so
+-- late-joining devices and reconnections always see the current state.
+alter table vh_game_sessions add column if not exists paused boolean default false;
+alter table vh_game_sessions add column if not exists restart_seq int default 0;
+
+-- Atomically bumps restart_seq (triggering all subscribers), clears paused,
+-- and zeroes every player's score in one transaction.
+create or replace function vh_bump_restart(s_id uuid)
+returns void language plpgsql as $$
+begin
+  update vh_game_sessions
+     set restart_seq = restart_seq + 1, paused = false
+   where id = s_id;
+  update vh_session_players
+     set score = 0, accuracy = 0
+   where session_id = s_id;
+end;
+$$;

@@ -59,6 +59,8 @@ export interface GameSession {
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
+  paused?: boolean;      // Phase 7 — cross-device pause state
+  restart_seq?: number;  // Phase 7 — incremented by vh_bump_restart to trigger restarts
 }
 
 export interface SessionPlayer {

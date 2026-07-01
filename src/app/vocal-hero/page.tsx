@@ -10,8 +10,9 @@ import {
   subscribeToPlayers,
   subscribeToSession,
   subscribeToNoteResults,
+  setSessionPaused,
+  restartSession,
 } from '@/lib/vocal-hero/supabaseClient';
-import { PitchEngine } from '@/lib/vocal-hero/pitchEngine';
 import { SatbLane } from './SatbLane';
 import type { Song, GameSession, SessionPlayer } from '@/lib/vocal-hero/types';
 
@@ -21,8 +22,6 @@ const PART_COLOURS = ['#f472b6', '#fb923c', '#60a5fa', '#34d399']; // S A T B
 const PART_NAMES   = ['Soprano', 'Alto', 'Tenor', 'Bass'];
 const HOST_ID      = 'host';
 
-// Legacy game's palette/typography — kept consistent so the new app's menu
-// reads as the same "Vocal Hero," not an unrelated admin tool.
 const C = {
   bg: '#0b1026', bg2: '#161a40', ink: '#f4f1e6', muted: '#9aa0c8',
   gold: '#f0b429', goldSoft: '#ffd97a', line: '#2c3470',
@@ -39,17 +38,24 @@ export default function VocalHeroHostPage() {
   const [session,  setSession]  = useState<GameSession | null>(null);
   const [players,  setPlayers]  = useState<SessionPlayer[]>([]);
   const [elapsed,  setElapsed]  = useState(0);
-  const [elapsedHiRes, setElapsedHiRes] = useState(0); // rAF-driven, for smooth lane scrolling
+  const [elapsedHiRes, setElapsedHiRes] = useState(0);
   const [noteResults, setNoteResults]   = useState<Record<string, boolean>>({});
   const [countdown, setCountdown] = useState<number | null>(null);
   const [error,    setError]    = useState('');
 
-  const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
-  const unsubRef   = useRef<(() => void)[]>([]);
-  const rafRef     = useRef<number | null>(null);
-  const playStartRef = useRef(0);
-  const countdownRafRef = useRef<number | null>(null);
+  const timerRef          = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef           = useRef<ReturnType<typeof setInterval> | null>(null);
+  const unsubRef          = useRef<(() => void)[]>([]);
+  const rafRef            = useRef<number | null>(null);
+  const playStartRef      = useRef(0);
+  const countdownRafRef   = useRef<number | null>(null);
+  const elapsedHiResRef   = useRef(0);   // mirrors state — avoids stale closure on pause
+  const pausedRef         = useRef(false);
+  const lastRestartSeqRef = useRef<number | undefined>(undefined);
+  const songRef           = useRef<Song | null>(null); // stable ref for timer callbacks
+
+  // Keep songRef in sync
+  useEffect(() => { songRef.current = song; }, [song]);
 
   // ── Load songs on mount ──────────────────────────────────────────────────
   useEffect(() => {
@@ -69,7 +75,7 @@ export default function VocalHeroHostPage() {
     };
   }, []);
 
-  // ── Poll for players while in lobby (Realtime fallback) ──────────────────
+  // ── Poll for players while in lobby ──────────────────────────────────────
   useEffect(() => {
     if (screen === 'lobby' && session) {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -82,6 +88,83 @@ export default function VocalHeroHostPage() {
     }
   }, [screen, session]);
 
+  // ── Smooth scrolling rAF loop — extracted so pause/restart can reuse it ──
+  const beginPlayback = useCallback(() => {
+    playStartRef.current = performance.now() - elapsedHiResRef.current * 1000;
+    const rafTick = () => {
+      const t = (performance.now() - playStartRef.current) / 1000;
+      elapsedHiResRef.current = t;
+      setElapsedHiRes(t);
+      rafRef.current = requestAnimationFrame(rafTick);
+    };
+    rafRef.current = requestAnimationFrame(rafTick);
+  }, []);
+
+  // ── 1Hz elapsed timer — extracted so pause/restart can reuse it ──────────
+  const beginTimer = useCallback(() => {
+    timerRef.current = setInterval(() => {
+      setElapsed(prev => {
+        const s = songRef.current;
+        if (!s) return prev;
+        if (prev >= s.duration) {
+          handleEnd();
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 1000);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Pause-reaction ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!session || screen !== 'playing') return;
+    if (session.paused) {
+      // Freeze animation and score timer
+      pausedRef.current = true;
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    } else if (pausedRef.current) {
+      // Resume from frozen position
+      pausedRef.current = false;
+      beginPlayback();
+      beginTimer();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.paused, screen]);
+
+  // ── Restart-reaction ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const seq = session?.restart_seq;
+    if (seq === undefined) return;
+    if (lastRestartSeqRef.current === undefined) {
+      lastRestartSeqRef.current = seq;
+      return;
+    }
+    if (seq <= lastRestartSeqRef.current) return;
+    lastRestartSeqRef.current = seq;
+
+    // Cancel any in-progress playback
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (countdownRafRef.current) { cancelAnimationFrame(countdownRafRef.current); countdownRafRef.current = null; }
+
+    // Reset state
+    elapsedHiResRef.current = 0;
+    pausedRef.current = false;
+    setElapsed(0);
+    setElapsedHiRes(0);
+    setNoteResults({});
+    setCountdown(null);
+    setScreen('playing');
+
+    runCountdown().then(() => {
+      beginTimer();
+      beginPlayback();
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.restart_seq]);
+
   // ── Handlers ─────────────────────────────────────────────────────────────
 
   async function handlePickSong(s: Song) {
@@ -91,7 +174,6 @@ export default function VocalHeroHostPage() {
       const sess = await createSession(s.id, HOST_ID);
       setSession(sess);
 
-      // Subscribe to player + session + note hit/miss changes
       const u1 = subscribeToPlayers(sess.id, setPlayers);
       const u2 = subscribeToSession(sess.id, setSession);
       const u3 = subscribeToNoteResults(sess.id, r =>
@@ -99,7 +181,6 @@ export default function VocalHeroHostPage() {
       );
       unsubRef.current = [u1, u2, u3];
 
-      // Initial player fetch
       setPlayers(await fetchPlayers(sess.id));
       setScreen('lobby');
     } catch (e: unknown) {
@@ -107,7 +188,6 @@ export default function VocalHeroHostPage() {
     }
   }
 
-  // 5-second countdown lead-in — notes scroll in from the right, no scoring yet.
   function runCountdown(durationSec = 5): Promise<void> {
     return new Promise(resolve => {
       const start = performance.now();
@@ -115,12 +195,14 @@ export default function VocalHeroHostPage() {
         const sec = (performance.now() - start) / 1000;
         if (sec >= durationSec) {
           setCountdown(null);
+          elapsedHiResRef.current = 0;
           setElapsedHiRes(0);
           countdownRafRef.current = null;
           resolve();
           return;
         }
-        setElapsedHiRes(sec - durationSec); // ramps -5 → 0
+        elapsedHiResRef.current = sec - durationSec;
+        setElapsedHiRes(sec - durationSec);
         setCountdown(Math.ceil(durationSec - sec));
         countdownRafRef.current = requestAnimationFrame(tick);
       };
@@ -133,32 +215,15 @@ export default function VocalHeroHostPage() {
     setError('');
     try {
       await startSession(session.id);
+      elapsedHiResRef.current = 0;
       setElapsed(0);
       setElapsedHiRes(0);
       setScreen('playing');
 
       await runCountdown();
 
-      // Elapsed timer — drives the progress bar + end-of-song check, unchanged
-      timerRef.current = setInterval(() => {
-        setElapsed(prev => {
-          if (!song) return prev;
-          if (prev >= song.duration) {
-            handleEnd();
-            return prev;
-          }
-          return prev + 1;
-        });
-      }, 1000);
-
-      // Smooth scrolling clock — host has no audio engine to piggyback on,
-      // so it gets its own rAF loop purely for lane animation.
-      playStartRef.current = performance.now();
-      const rafTick = () => {
-        setElapsedHiRes((performance.now() - playStartRef.current) / 1000);
-        rafRef.current = requestAnimationFrame(rafTick);
-      };
-      rafRef.current = requestAnimationFrame(rafTick);
+      beginTimer();
+      beginPlayback();
     } catch (e: unknown) {
       setError(String(e));
     }
@@ -183,9 +248,30 @@ export default function VocalHeroHostPage() {
     setPlayers([]);
     setElapsed(0);
     setElapsedHiRes(0);
+    elapsedHiResRef.current = 0;
     setNoteResults({});
     setCountdown(null);
+    pausedRef.current = false;
+    lastRestartSeqRef.current = undefined;
     setScreen('idle');
+  }
+
+  async function handlePause() {
+    if (!session) return;
+    try {
+      await setSessionPaused(session.id, !session.paused);
+    } catch (e: unknown) {
+      setError(String(e));
+    }
+  }
+
+  async function handleRestart() {
+    if (!session) return;
+    try {
+      await restartSession(session.id);
+    } catch (e: unknown) {
+      setError(String(e));
+    }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -253,7 +339,10 @@ export default function VocalHeroHostPage() {
             elapsedHiRes={elapsedHiRes}
             noteResults={noteResults}
             countdown={countdown}
+            isPaused={!!session.paused}
             onEnd={handleEnd}
+            onPause={handlePause}
+            onRestart={handleRestart}
           />
         )}
         {screen === 'ended'   && song && (
@@ -420,7 +509,7 @@ function extractYtId(url: string): string | null {
 // ── PlayingScreen ──────────────────────────────────────────────────────────
 
 function PlayingScreen({
-  song, players, elapsed, elapsedHiRes, noteResults, countdown, onEnd,
+  song, players, elapsed, elapsedHiRes, noteResults, countdown, isPaused, onEnd, onPause, onRestart,
 }: {
   song: Song;
   players: SessionPlayer[];
@@ -428,26 +517,30 @@ function PlayingScreen({
   elapsedHiRes: number;
   noteResults: Record<string, boolean>;
   countdown: number | null;
+  isPaused: boolean;
   onEnd: () => void;
+  onPause: () => void;
+  onRestart: () => void;
 }) {
   const progress = song.duration > 0 ? elapsed / song.duration : 0;
   const videoId  = song.yt_url ? extractYtId(song.yt_url) : null;
 
-  // Soprano-specific lyric — shown right above the Soprano lane below,
-  // not whichever part happens to have a lyric at this instant.
   const sopranoNote = (song.notes ?? []).find(n => n.part === 0 && elapsedHiRes >= n.start && elapsedHiRes < n.end && n.lyric);
 
   return (
     <div className="flex flex-col h-full p-4 gap-4 relative">
       {countdown !== null && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-50">
+        <div
+          className="absolute inset-0 flex items-center justify-center z-50"
+          style={{ background: (countdown ?? 0) > 3 ? 'rgba(0,0,0,0.6)' : 'transparent' }}
+        >
           <span className="text-9xl font-extrabold" style={{ color: '#f0b429' }}>
             {countdown > 0 ? countdown : 'Sing!'}
           </span>
         </div>
       )}
 
-      {/* YouTube mini player — must be visible for autoplay to work */}
+      {/* YouTube mini player */}
       {videoId && (
         <iframe
           key={videoId}
@@ -466,9 +559,8 @@ function PlayingScreen({
         />
       </div>
 
-      {/* SATB lanes — all 4 voices, stacked and scrolling toward the cue line */}
+      {/* SATB lanes */}
       <div className="flex flex-col gap-2 flex-1 min-h-0">
-        {/* Soprano lyric strip — directly above the Soprano lane */}
         <div className="text-center min-h-[2rem] flex items-center justify-center">
           {sopranoNote ? (
             <p className="text-xl font-bold text-white leading-tight">{sopranoNote.lyric}</p>
@@ -493,7 +585,7 @@ function PlayingScreen({
         })}
       </div>
 
-      {/* Live leaderboard + end button */}
+      {/* Live leaderboard + game controls */}
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex gap-3 flex-wrap flex-1">
           {[...players]
@@ -511,12 +603,27 @@ function PlayingScreen({
               </div>
             ))}
         </div>
-        <button
-          onClick={onEnd}
-          className="bg-red-800 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors flex-shrink-0"
-        >
-          End Game
-        </button>
+        <div className="flex gap-2 flex-shrink-0">
+          <button
+            onClick={onPause}
+            className="text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+            style={{ background: isPaused ? '#16a34a' : '#374151', color: '#fff', border: '1px solid #4b5563' }}
+          >
+            {isPaused ? '▶ Resume' : '⏸ Pause'}
+          </button>
+          <button
+            onClick={onRestart}
+            className="text-sm font-semibold px-4 py-2 rounded-lg transition-colors bg-gray-700 hover:bg-gray-600 text-white border border-gray-600"
+          >
+            ↺ Restart
+          </button>
+          <button
+            onClick={onEnd}
+            className="bg-red-800 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+          >
+            End Game
+          </button>
+        </div>
       </div>
     </div>
   );
