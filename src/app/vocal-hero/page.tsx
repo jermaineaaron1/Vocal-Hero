@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   fetchAllSongs,
+  fetchSession,
   createSession,
   startSession,
   endSession,
@@ -87,6 +88,24 @@ export default function VocalHeroHostPage() {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     }
   }, [screen, session]);
+
+  // ── Poll session during gameplay — fallback when Realtime WebSocket drops ─
+  // Picks up paused/restart_seq changes even if the subscription is broken.
+  const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (screen === 'playing' && session) {
+      if (sessionPollRef.current) clearInterval(sessionPollRef.current);
+      sessionPollRef.current = setInterval(async () => {
+        const updated = await fetchSession(session.id);
+        if (updated) setSession(updated);
+      }, 2000);
+    } else {
+      if (sessionPollRef.current) { clearInterval(sessionPollRef.current); sessionPollRef.current = null; }
+    }
+    return () => {
+      if (sessionPollRef.current) { clearInterval(sessionPollRef.current); sessionPollRef.current = null; }
+    };
+  }, [screen, session?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Smooth scrolling rAF loop — extracted so pause/restart can reuse it ──
   const beginPlayback = useCallback(() => {

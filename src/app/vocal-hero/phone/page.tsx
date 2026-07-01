@@ -108,9 +108,11 @@ function PhonePageInner() {
     };
   }, []);
 
-  // ── Poll session status while in lobby ───────────────────────────────────
+  // ── Poll session status while in lobby or playing ────────────────────────
+  // During lobby: detects game start. During playing: fallback for
+  // pause/restart when Realtime WebSocket is unreliable.
   useEffect(() => {
-    if (screen === 'lobby' && session) {
+    if ((screen === 'lobby' || screen === 'playing') && session) {
       if (pollRef.current) clearInterval(pollRef.current);
       pollRef.current = setInterval(async () => {
         const updated = await import('@/lib/vocal-hero/supabaseClient')
