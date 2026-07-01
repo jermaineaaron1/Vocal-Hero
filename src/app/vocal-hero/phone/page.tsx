@@ -118,7 +118,7 @@ function PhonePageInner() {
         const updated = await import('@/lib/vocal-hero/supabaseClient')
           .then(m => m.fetchSession(session.id));
         if (updated) setSession(updated);
-      }, 2000);
+      }, 1000);
     } else {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     }

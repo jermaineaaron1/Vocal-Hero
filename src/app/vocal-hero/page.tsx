@@ -98,7 +98,7 @@ export default function VocalHeroHostPage() {
       sessionPollRef.current = setInterval(async () => {
         const updated = await fetchSession(session.id);
         if (updated) setSession(updated);
-      }, 2000);
+      }, 1000);
     } else {
       if (sessionPollRef.current) { clearInterval(sessionPollRef.current); sessionPollRef.current = null; }
     }
